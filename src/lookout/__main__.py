@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 
 from lookout.config import ConfigError, load_config
 from lookout.events import ReplaySource
@@ -31,7 +32,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             steps = " -> ".join(f"{s.id}({s.payload},p{s.priority})" for s in chain.steps)
         else:
             steps = f"one-shot {chain.on_trigger.action.type}"  # type: ignore[union-attr]
-        print(f"  chain   {chain.id:<16} {chain.camera}:{chain.trigger.label}  {steps}")
+        print(f"  chain   {chain.id:<16} {chain.camera}:{'|'.join(chain.trigger.labels)}  {steps}")
     return 0
 
 
@@ -53,6 +54,41 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tier1(args: argparse.Namespace) -> int:
+    """Run only the detector over one camera's source and print the events it
+    would raise, with detector latency. The verification tool for tier-1."""
+    from prometheus_client import REGISTRY
+
+    from lookout.events import DetectionEvent
+    from lookout.tier1 import VideoSource, YoloDetector
+
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return 1
+    camera = config.cameras[args.camera]
+    uri = args.source or camera.source
+    detector = YoloDetector(config.tier1, models_dir=args.models_dir)
+    source = VideoSource(args.camera, uri, detector, config.tier1, loop=False)
+    t0 = time.perf_counter()
+    events = 0
+    for item in source.stream():
+        if isinstance(item, DetectionEvent):
+            events += 1
+            print(f"[{item.ts:7.2f}] {item.camera}: {item.label} ({item.confidence:.2f}) bbox={item.bbox}")
+    wall = time.perf_counter() - t0
+    labels = {"model": detector.name, "tier": "tier1"}
+    count = REGISTRY.get_sample_value("lookout_inference_seconds_count", labels) or 0
+    total = REGISTRY.get_sample_value("lookout_inference_seconds_sum", labels) or 0.0
+    print()
+    print(f"{source.frames_read} frames read, {source.frames_analysed} analysed, {events} event(s), "
+          f"{wall:.1f}s wall")
+    if count:
+        print(f"detector {detector.name}: {int(count)} calls, mean {1000 * total / count:.1f} ms")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="lookout")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -68,6 +104,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--answers", required=True, help="JSON script of model answers per step id")
     p.add_argument("--fps", type=float, default=2.0, help="synthetic frame rate for window sampling")
     p.set_defaults(func=cmd_replay)
+
+    p = sub.add_parser("tier1", help="run only the detector over a camera and print its events")
+    p.add_argument("--config", required=True)
+    p.add_argument("--camera", required=True, help="camera name from the config")
+    p.add_argument("--source", help="override the camera's source URI (file, RTSP, or device index)")
+    p.add_argument("--models-dir", default=".", help="where <model>.pt and the OpenVINO export live")
+    p.set_defaults(func=cmd_tier1)
 
     args = parser.parse_args(argv)
     logging.basicConfig(

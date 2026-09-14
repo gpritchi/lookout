@@ -100,7 +100,7 @@ class Engine:
         # event reaches here the intent filter has already been applied.
         with self._lock:
             for chain in self.config.chains:
-                if chain.camera != event.camera or chain.trigger.label != event.label:
+                if chain.camera != event.camera or not chain.trigger.matches(event.label):
                     continue
                 if chain.id in self._runs:
                     self._trace(f"[{event.ts:7.2f}] {chain.id}: already active, ignoring {event.label}")

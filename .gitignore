@@ -22,3 +22,6 @@ __pycache__/
 
 # Secrets / local env
 .env
+
+# OS noise
+.DS_Store
