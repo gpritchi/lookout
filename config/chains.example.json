@@ -1,0 +1,104 @@
+{
+  "models": {
+    "qwen3-vl": {
+      "type": "openai-compatible",
+      "endpoint": "http://localhost:4000/v1",
+      "model": "qwen3-vl-8b-instruct",
+      "capabilities": ["image", "image_sequence"]
+    },
+    "nemotron-omni": {
+      "type": "openai-compatible",
+      "endpoint": "http://localhost:4000/v1",
+      "model": "nemotron-3-nano-omni-30b-a3b",
+      "capabilities": ["image", "image_sequence", "video_clip"]
+    }
+  },
+
+  "cameras": {
+    "driveway": { "source": "fixtures/private/driveway-loop.mp4" },
+    "living-room": { "source": "fixtures/private/living-room.mp4", "tier1": "mediapipe-hands" }
+  },
+
+  "tier1": {
+    "model": "yolov8n",
+    "backend": "openvino",
+    "min_confidence": 0.5,
+    "debounce_frames": 3
+  },
+
+  "actions": {
+    "sink": "mock",
+    "ha_webhook_url": null
+  },
+
+  "chains": [
+    {
+      "id": "driveway-arrivals",
+      "camera": "driveway",
+      "trigger": { "label": "car", "priority": 10 },
+      "steps": [
+        {
+          "id": "classify-vehicle",
+          "model": "qwen3-vl",
+          "payload": "image",
+          "priority": 50,
+          "timeout_s": 30,
+          "prompt": "Look at the vehicle in this driveway image. Identify it by make/body style and color. Answer with exactly one of: GREY_VAN, BLACK_TACOMA, OTHER.",
+          "outcomes": {
+            "GREY_VAN": { "next": "check-driver" },
+            "BLACK_TACOMA": { "next": "check-tacoma-driver" },
+            "OTHER": { "end": true }
+          }
+        },
+        {
+          "id": "check-driver",
+          "model": "qwen3-vl",
+          "payload": "image_sequence",
+          "priority": 60,
+          "timeout_s": 60,
+          "prompt": "These frames follow a grey van parking in the driveway. Does a person in a reflective vest get out, take a package from the van, and head toward the house? Answer exactly one of: DELIVERY_IN_PROGRESS, PERSON_NO_PACKAGE, NOBODY_YET.",
+          "outcomes": {
+            "DELIVERY_IN_PROGRESS": { "action": { "type": "notify", "message": "Amazon delivery arriving" } },
+            "PERSON_NO_PACKAGE": { "action": { "type": "notify", "message": "Unknown grey van in driveway" } },
+            "NOBODY_YET": { "retry_in_s": 5 }
+          }
+        },
+        {
+          "id": "check-tacoma-driver",
+          "model": "qwen3-vl",
+          "payload": "image_sequence",
+          "priority": 60,
+          "timeout_s": 60,
+          "prompt": "These frames follow a black Tacoma parking. Watch who exits and from which door. Does a man exit from the driver's side, or a woman, or has nobody exited yet? Answer exactly one of: MAN_DRIVER_SIDE, WOMAN, NOBODY_YET.",
+          "outcomes": {
+            "MAN_DRIVER_SIDE": { "action": { "type": "notify", "message": "Brother is stopping by" } },
+            "WOMAN": { "action": { "type": "notify", "message": "Sister-in-law is stopping by" } },
+            "NOBODY_YET": { "retry_in_s": 5 }
+          }
+        }
+      ]
+    },
+    {
+      "id": "tv-netflix",
+      "camera": "living-room",
+      "comment": "Deliberately NO escalation steps: finger-count gestures are cheap-model territory (MediaPipe hand landmarks on CPU), so the action fires one-shot at tier-1. held_frames is the intent filter — a signal held toward the camera, not a passing hand position. Demonstrates that the tier boundary is empirical: conditions live at the cheapest tier that can handle them.",
+      "trigger": { "label": "gesture:three_fingers", "held_frames": 8, "priority": 100 },
+      "steps": [],
+      "on_trigger": { "action": { "type": "ha_webhook", "service": "tv_netflix_on" } }
+    },
+    {
+      "id": "tv-plex",
+      "camera": "living-room",
+      "trigger": { "label": "gesture:four_fingers", "held_frames": 8, "priority": 100 },
+      "steps": [],
+      "on_trigger": { "action": { "type": "ha_webhook", "service": "tv_plex_on" } }
+    },
+    {
+      "id": "tv-off",
+      "camera": "living-room",
+      "trigger": { "label": "gesture:ok_sign", "held_frames": 8, "priority": 100 },
+      "steps": [],
+      "on_trigger": { "action": { "type": "ha_webhook", "service": "tv_off" } }
+    }
+  ]
+}
