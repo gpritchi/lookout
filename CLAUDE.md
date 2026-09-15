@@ -46,7 +46,8 @@ The journal and everything in `notes/` stays out of the repo. Do not weaken the
   timeout_s). **Capability gating is load-time validation**: a step whose payload type
   is not in its model's capabilities fails config load with a clear error.
 - **Scheduler**: one queue per model, priority-ordered (higher number wins), a single
-  worker process draining all queues (everything serves off the MI50 for now). No
+  worker per model draining that model's queue (a slow clip on one card must not
+  starve one-second classifications on the other; found live, not designed). No
   mid-inference preemption in v1 — priority is ordering and queue-jumping only.
   Chain state resets when a step's timeout_s expires.
 - **Tier-2 endpoint**: any OpenAI-compatible chat endpoint. The demo uses a LiteLLM
@@ -54,8 +55,10 @@ The journal and everything in `notes/` stays out of the repo. Do not weaken the
   proxy's business, never this repo's. Endpoint and model name live in config, never
   hardcoded. `image_sequence` is sent as multiple image parts with a short text part
   between each (llama.cpp merges strictly consecutive images as video frames).
-  `video_clip` is a declared capability no demo model serves; it exists so the
-  capability gate has something real to reject.
+  `video_clip` payloads are MP4s fetched from the recorder (MediaMTX playback API)
+  for the step's window, audio track included, and sent as llama.cpp's `input_video`
+  part. Only a model that genuinely understands sequence and sound earns that
+  step: put-down vs pick-up, how many got out, what was said at the door.
 - **Actions**: mock sink (prints/logs what it would have done) is the default; a real
   HA webhook URL is an optional config field. Demo runs on the mock sink.
 - **Metrics**: wrap every inference call in a timing context manager from the start;

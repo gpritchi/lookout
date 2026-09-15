@@ -10,11 +10,11 @@ Design (settled — see CLAUDE.md):
 - One priority queue per model name. Higher priority number wins; FIFO within a
   priority. An InferenceJob carries what the worker needs to run it and what the
   chain engine needs to route the answer back.
-- A Worker is configured with the list of models it can serve (v1: one worker,
-  all models, since everything runs on one card). It repeatedly takes the
-  highest-priority job across its models' queues and runs it. A second host that
-  only serves one model is a second Worker with a shorter list — config, not
-  redesign.
+- A Worker is configured with the list of models it can serve. The live runner
+  starts one per model: a worker blocked on a three-minute clip must not hold
+  up one-second classifications for a model on another card. It repeatedly
+  takes the highest-priority job across its models' queues and runs it. A
+  second host is a worker with a different list — config, not redesign.
 - No mid-inference preemption: a priority-100 job jumps every queue but never
   cancels an in-flight call.
 - Every call the worker makes runs inside metrics.timed(model, tier).

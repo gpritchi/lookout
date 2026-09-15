@@ -1,5 +1,7 @@
 {
   "classify-vehicle": ["GREY_VAN", "BLACK_TACOMA"],
   "check-driver": ["NOBODY_YET", "The person in the vest is carrying a box toward the door: DELIVERY_IN_PROGRESS."],
-  "check-tacoma-driver": ["MAN_DRIVER_SIDE"]
+  "confirm-delivery": ["DELIVERED"],
+  "check-tacoma-driver": ["MAN_DRIVER_SIDE"],
+  "count-visitors": ["TWO_TO_HOUSE"]
 }

@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lookout.actions import ActionSink, MockSink
+from lookout.clips import MediaMtxClips
 from lookout.config import Config
 from lookout.engine import Engine, StepPayload
 from lookout.events import DetectionEvent, Frame, Source
@@ -41,6 +42,15 @@ class VirtualClock:
     def advance_to(self, ts: float) -> None:
         if ts > self.t:
             self.t = ts
+
+
+class ReplayClips:
+    """Clip provider for replay: there is no recorder, so a video_clip step
+    gets a placeholder and the scripted model answers regardless. The trace
+    still shows the window the real provider would have fetched."""
+
+    def clip(self, camera: str, start_ts: float, end_ts: float) -> bytes:
+        return b"replay-placeholder"
 
 
 class ScriptedModel:
@@ -116,7 +126,7 @@ def run_replay(
         report.trace.append(line)
         log.info("%s", line)
 
-    engine = Engine(config, scheduler, sink, buffers, clock.now, trace=trace)
+    engine = Engine(config, scheduler, sink, buffers, clock.now, trace=trace, clips=ReplayClips())
 
     def on_result(job: InferenceJob, answer: str) -> None:
         report.inference_calls += 1
@@ -202,13 +212,26 @@ def run_live(
         report.trace.append(line)
         (trace or (lambda s: log.info("%s", s)))(line)
 
-    engine = Engine(config, scheduler, sink, buffers, clock, trace=_trace)
+    # Clips come from the recorder, addressed by wall-clock time: engine time 0
+    # is `epoch` on the wall clock.
+    epoch = time.time()
+    clip_paths = {name: (cam.clips.playback, cam.clips.path) for name, cam in config.cameras.items() if cam.clips}
+    clips = MediaMtxClips(clip_paths, epoch=epoch) if clip_paths else None
+    engine = Engine(config, scheduler, sink, buffers, clock, trace=_trace, clips=clips)
 
     def on_result(job: InferenceJob, answer: str) -> None:
         report.inference_calls += 1
         engine.on_result(job, answer)
 
-    worker = Worker(scheduler, list(config.models), run=model, on_result=on_result, on_error=engine.on_error)
+    # One worker per model. Each model is its own backend with its own queue;
+    # a single worker over all of them would let a three-minute clip on one
+    # card starve one-second classifications on the other, which is exactly
+    # what happened on the first live run with two models. A model that lives
+    # on the same card as another still serialises at the server.
+    workers = [
+        Worker(scheduler, [name], run=model, on_result=on_result, on_error=engine.on_error)
+        for name in config.models
+    ]
     stop = threading.Event()
 
     def pump(name: str, source: Source) -> None:
@@ -226,7 +249,8 @@ def run_live(
             _trace(f"[{clock():7.2f}] source {name}: stream ended")
 
     threads = [threading.Thread(target=pump, args=(n, s), name=f"source[{n}]", daemon=True) for n, s in sources.items()]
-    worker.start()
+    for w in workers:
+        w.start()
     for t in threads:
         t.start()
     try:
@@ -246,7 +270,10 @@ def run_live(
         _trace(f"[{clock():7.2f}] stopping: interrupted")
     finally:
         stop.set()
-        worker.stop()
+        for w in workers:
+            w.stop()
+        if clips is not None:
+            clips.close()
     report.final_ts = clock()
     if isinstance(sink, MockSink):
         for action, ctx in sink.fired:
