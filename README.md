@@ -190,7 +190,8 @@ intent filter. The tier boundary is empirical and movable in both directions.
   part between images because llama.cpp merges consecutive images into one
   video input. Clips go as llama.cpp's `input_video` part.
 - **`clips.py`** — fetches a time range from a MediaMTX recorder as MP4,
-  audio track included.
+  audio track included. Whether the server actually uses that track is the
+  server's business; see *Limitations* for the one I tested against.
 - **`metrics.py`** — every inference call, detector frames included, is timed
   into a Prometheus histogram labelled by model and tier, served at
   `/metrics` when `metrics.port` is set.
@@ -230,6 +231,15 @@ Three honest points.
   against the OpenAI schema (LiteLLM does) rejects that part, so the clip
   model's `endpoint` points at the server directly. Per-model endpoints exist
   for exactly this.
+- The audio never made it. The fork's build I ran logged "failed to decode
+  the video's audio track — audio track skipped, frames only" for every
+  recorder clip, so every live Nemotron answer in this write-up was reached
+  from frames alone. The cause is in the fork, not here: its audio pass
+  demuxes a buffer over ffmpeg's `cache:pipe:0` with the video discarded,
+  and the mov demuxer's seeks yield no samples for a well-formed MP4. A
+  patched build that spools the buffer to a temp file exists in my cluster
+  repo and had not been rolled out when this was written. The engine's
+  "clip with audio" step is real; the model that heard it is not yet.
 - Clips are slow. Thirty seconds of video at the fork's sampling is about
   5,000 prompt tokens; on a 32 GB MI50 over Vulkan that's two and a half
   minutes. The video step is the slow tier by design: low priority, long
