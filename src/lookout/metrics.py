@@ -7,17 +7,19 @@ real numbers rather than an assertion.
 
 The label set is deliberately small. By-host labels, Grafana dashboards, and
 multi-worker aggregation are future work; adding {host} later is additive.
-Serving the registry over HTTP (`/metrics`) is a separate concern and arrives with
-its own PR.
+`serve()` exposes the registry at /metrics for Prometheus to scrape.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from prometheus_client import Histogram
+from prometheus_client import Histogram, start_http_server
+
+log = logging.getLogger(__name__)
 
 # Buckets span two regimes on one axis: detector frames (a few ms to ~100 ms on
 # CPU) and VLM calls (seconds to a minute on a busy card). Finer than the
@@ -33,6 +35,13 @@ INFERENCE_SECONDS = Histogram(
     labelnames=("model", "tier"),
     buckets=_BUCKETS,
 )
+
+
+def serve(port: int, host: str = "0.0.0.0") -> None:
+    """Start the /metrics HTTP server on a daemon thread. prometheus_client
+    serves its default registry, which is where INFERENCE_SECONDS lives."""
+    start_http_server(port, addr=host)
+    log.info("metrics: serving http://%s:%d/metrics", host, port)
 
 
 @contextmanager

@@ -29,6 +29,8 @@ COPY --from=builder /app/src /app/src
 COPY config ./config
 COPY fixtures/sample ./fixtures/sample
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
+# /metrics, when config enables it.
+EXPOSE 9108
 ENTRYPOINT ["python", "-m", "lookout"]
 CMD ["replay", "--config", "config/chains.example.json", \
      "--events", "fixtures/sample/driveway-replay.jsonl", \

@@ -86,6 +86,15 @@ class RunReport:
     final_ts: float = 0.0
 
 
+def _describe_fired(sink: ActionSink) -> list[str]:
+    """One line per action fired, for the run report. Every sink keeps `fired`."""
+    lines = []
+    for action, ctx in sink.fired:
+        extras = ", ".join(f"{k}={v}" for k, v in action.model_dump(exclude={"type"}).items())
+        lines.append(f"{action.type}({extras}) <- {ctx.chain_id} on {ctx.camera}")
+    return lines
+
+
 def build_buffers(config: Config) -> dict[str, FrameBuffer]:
     """One ring buffer per camera, deep enough for the widest look-back any of
     its chains asks for, plus the longest a chain can spend in flight before a
@@ -173,10 +182,7 @@ def run_replay(
         drain()
     report.final_ts = clock.now()
 
-    if isinstance(sink, MockSink):
-        for action, ctx in sink.fired:
-            extras = ", ".join(f"{k}={v}" for k, v in action.model_dump(exclude={"type"}).items())
-            report.actions.append(f"{action.type}({extras}) <- {ctx.chain_id} on {ctx.camera}")
+    report.actions = _describe_fired(sink)
     return report
 
 
@@ -257,7 +263,7 @@ def run_live(
         while not stop.is_set():
             time.sleep(0.25)
             engine.tick()
-            fired = len(sink.fired) if isinstance(sink, MockSink) else 0
+            fired = len(sink.fired)
             if stop_after_actions and fired >= stop_after_actions:
                 _trace(f"[{clock():7.2f}] stopping: {fired} action(s) fired")
                 break
@@ -275,8 +281,5 @@ def run_live(
         if clips is not None:
             clips.close()
     report.final_ts = clock()
-    if isinstance(sink, MockSink):
-        for action, ctx in sink.fired:
-            extras = ", ".join(f"{k}={v}" for k, v in action.model_dump(exclude={"type"}).items())
-            report.actions.append(f"{action.type}({extras}) <- {ctx.chain_id} on {ctx.camera}")
+    report.actions = _describe_fired(sink)
     return report

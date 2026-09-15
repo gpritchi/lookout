@@ -96,6 +96,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     into the engine, escalations go to the models in the registry, actions go
     to the configured sink. Runs until Ctrl-C, --max-seconds, or
     --stop-after-actions."""
+    from lookout.actions import ActionSink, HAWebhookSink, MockSink
     from lookout.runtime import run_live
     from lookout.tier1 import VideoSource, YoloDetector
     from lookout.vlm import OpenAICompatibleClient
@@ -117,15 +118,28 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not sources:
         print("no cameras to run", file=sys.stderr)
         return 1
+    if config.metrics.port:
+        from lookout.metrics import serve
+
+        serve(config.metrics.port, config.metrics.host)
+    sink: ActionSink
+    if config.actions.sink == "ha_webhook":
+        sink = HAWebhookSink(config.actions.ha_webhook_url or "", timeout_s=config.actions.ha_timeout_s)
+    else:
+        sink = MockSink()
     client = OpenAICompatibleClient(config.models)
     try:
         report = run_live(
-            config, sources, client,
+            config, sources, client, sink=sink,
             max_seconds=args.max_seconds, stop_after_actions=args.stop_after_actions,
             trace=lambda line: print(line, flush=True),
         )
     finally:
         client.close()
+        if isinstance(sink, HAWebhookSink):
+            sink.close()
+            if sink.failed:
+                print(f"{sink.failed} webhook call(s) failed; see the log", file=sys.stderr)
     print()
     print(f"ran {report.final_ts:.0f}s, {report.inference_calls} inference call(s), {len(report.actions)} action(s):")
     for line in report.actions:
