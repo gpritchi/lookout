@@ -43,18 +43,23 @@ def test_shipped_fixture_end_to_end():
     report = run_replay(config, ReplaySource(EVENTS), model)
     assert report.actions == [
         "ha_webhook(service=tv_netflix_on) <- tv-netflix on living-room",
-        "notify(message=Amazon delivery arriving) <- driveway-arrivals on driveway",
-        "notify(message=Brother is stopping by) <- driveway-arrivals on driveway",
+        "notify(message=Package delivered) <- driveway-arrivals on driveway",
+        "notify(message=Brother and sister-in-law are at the door) <- driveway-arrivals on driveway",
     ]
-    assert report.inference_calls == 5
+    assert report.inference_calls == 7
     kinds = [(p.step_id, p.kind, len(p.frames)) for p in model.calls]
     assert kinds == [
         ("classify-vehicle", "image", 1),
         ("check-driver", "image_sequence", 6),
         ("check-driver", "image_sequence", 6),
+        ("confirm-delivery", "video_clip", 0),
         ("classify-vehicle", "image", 1),
         ("check-tacoma-driver", "image_sequence", 8),
+        ("count-visitors", "video_clip", 0),
     ]
+    # video steps get a placeholder clip in replay and wait out their after_s
+    assert model.calls[3].clip == b"replay-placeholder"
+    assert any("confirm-delivery: -> nemotron-omni p40 video_clip x0 [clip -2.00..33.00" in line for line in report.trace)
     # the first check-driver window is [1, 11] around the 3.0 trigger; the retry re-centres to end at 16
     assert (model.calls[1].frames[0].ts, model.calls[1].frames[-1].ts) == (1.0, 11.0)
     assert (model.calls[2].frames[0].ts, model.calls[2].frames[-1].ts) == (6.0, 16.0)

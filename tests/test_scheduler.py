@@ -115,6 +115,39 @@ def test_worker_error_goes_to_on_error_and_worker_survives():
     assert results == ["ok"]
 
 
+def test_slow_model_does_not_block_a_fast_one_with_a_worker_each():
+    """The live finding: one worker over two models let a long clip call
+    starve quick classifications. A worker per model keeps them independent."""
+    s = Scheduler()
+    release = threading.Event()
+    fast_done = threading.Event()
+    seen: list[str] = []
+
+    def run(j):
+        if j.model == "slow":
+            release.wait(5.0)  # a three-minute clip, in miniature
+        return j.step_id
+
+    def on_result(j, r):
+        seen.append(r)
+        if j.model == "fast":
+            fast_done.set()
+
+    workers = [Worker(s, [m], run=run, on_result=on_result, poll_s=0.01) for m in ("slow", "fast")]
+    for w in workers:
+        w.start()
+    try:
+        s.submit(job("slow", 40, "clip"))
+        s.submit(job("fast", 50, "classify"))
+        assert fast_done.wait(2.0), "fast model's job waited behind the slow model's"
+        assert seen == ["classify"]
+        release.set()
+    finally:
+        for w in workers:
+            w.stop()
+    assert sorted(seen) == ["classify", "clip"]
+
+
 def test_worker_thread_drains_in_priority_order():
     s = Scheduler()
     done = threading.Event()

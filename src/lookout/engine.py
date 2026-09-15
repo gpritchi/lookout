@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from lookout.actions import ActionContext, ActionSink
+from lookout.clips import ClipError, ClipProvider
 from lookout.config import Capability, ChainSpec, Config, OutcomeSpec, StepSpec
 from lookout.events import DetectionEvent, Frame
 from lookout.frames import FrameBuffer
@@ -53,6 +54,7 @@ class StepPayload:
     generation: int
     center_ts: float
     timeout_s: float = 60.0  # the step's budget; the client uses it as its request timeout
+    clip: bytes | None = None  # MP4 bytes for video_clip payloads; frames is empty then
 
 
 @dataclass
@@ -77,12 +79,14 @@ class Engine:
         buffers: dict[str, FrameBuffer],
         clock: Callable[[], float],
         trace: Callable[[str], None] | None = None,
+        clips: ClipProvider | None = None,
     ) -> None:
         self.config = config
         self.scheduler = scheduler
         self.sink = sink
         self.buffers = buffers
         self.clock = clock
+        self.clips = clips
         self._trace = trace or (lambda line: log.info("%s", line))
         self._runs: dict[str, ChainRun] = {}
         self._gen = itertools.count(1)
@@ -206,25 +210,45 @@ class Engine:
         step, chain = run.step, run.chain
         buffer = self.buffers.get(chain.camera)
         frames: list[Frame] = []
-        if buffer is not None:
-            if step.payload == "image":
-                frame = buffer.at(run.center_ts)
-                frames = [frame] if frame is not None else []
-            else:
-                window = chain.window_for(step)
-                assert window is not None
-                frames = buffer.window(run.center_ts, window)
+        clip: bytes | None = None
+        if step.payload == "video_clip":
+            # Footage with its audio comes from the recorder, not the frame
+            # buffer. Fetched here, on the tick thread: a few MB over the LAN.
+            window = chain.window_for(step)
+            assert window is not None
+            start, end = run.center_ts - window.before_s, run.center_ts + window.after_s
+            if self.clips is None:
+                self._trace(f"[{now:7.2f}] {chain.id}/{step.id}: no clip provider, resetting chain")
+                self._finish(run)
+                return
+            try:
+                clip = self.clips.clip(chain.camera, start, end)
+            except ClipError as exc:
+                self._trace(f"[{now:7.2f}] {chain.id}/{step.id}: clip failed ({exc}), resetting chain")
+                self._finish(run)
+                return
+            span = f"clip {start:.2f}..{end:.2f} ({len(clip) // 1024} KB)"
+        elif buffer is not None and step.payload == "image":
+            frame = buffer.at(run.center_ts)
+            frames = [frame] if frame is not None else []
+            span = f"{frames[0].ts:.2f}..{frames[-1].ts:.2f}" if frames else "no frames"
+        elif buffer is not None:
+            window = chain.window_for(step)
+            assert window is not None
+            frames = buffer.window(run.center_ts, window)
+            span = f"{frames[0].ts:.2f}..{frames[-1].ts:.2f}" if frames else "no frames"
+        else:
+            span = "no frames"
         payload = StepPayload(
             kind=step.payload, prompt=step.prompt, frames=tuple(frames), camera=chain.camera,
             chain_id=chain.id, step_id=step.id, generation=run.generation, center_ts=run.center_ts,
-            timeout_s=step.timeout_s,
+            timeout_s=step.timeout_s, clip=clip,
         )
         self.scheduler.submit(
             InferenceJob(model=step.model, priority=step.priority, chain_id=chain.id, step_id=step.id, payload=payload)
         )
         run.dispatched = True
         run.deadline = now + step.timeout_s
-        span = f"{frames[0].ts:.2f}..{frames[-1].ts:.2f}" if frames else "no frames"
         self._trace(
             f"[{now:7.2f}] {chain.id}/{step.id}: -> {step.model} p{step.priority} "
             f"{step.payload} x{len(frames)} [{span}]"

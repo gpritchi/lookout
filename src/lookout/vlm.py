@@ -12,8 +12,11 @@ Payload shapes:
                   between images is not decoration: llama.cpp merges strictly
                   consecutive image parts into one "video" input, so without a
                   separator a six-frame window can arrive as three frames.
-  video_clip      not sent by this client (a model that takes clips gets its
-                  own client later); raising here lets the chain reset cleanly.
+  video_clip      one `input_video` part carrying the MP4 as a data URL, then
+                  the prompt. This is llama.cpp's own content type (and the
+                  llama.cpp-omni fork's, which also reads the clip's audio
+                  track); the OpenAI API has no video part, so a proxy in the
+                  middle has to pass it through untouched.
 
 Frames must carry JPEG bytes (`Frame.data`). Replay fixtures have none, and
 that is a configuration error at this layer, not something to paper over.
@@ -89,8 +92,14 @@ class OpenAICompatibleClient:
     # -- request building, kept separate so tests can see it -----------------
 
     def build_request(self, spec: ModelSpec, payload: StepPayload) -> dict[str, Any]:
+        content: list[dict[str, Any]] = []
         if payload.kind == "video_clip":
-            raise VlmClientError(f"{payload.chain_id}/{payload.step_id}: video_clip payloads need a clip-capable client")
+            if not payload.clip:
+                raise VlmClientError(f"{payload.chain_id}/{payload.step_id}: video_clip payload carries no clip")
+            content.append(_video_part(payload.clip))
+            content.append({"type": "text", "text": payload.prompt})
+            return self._body(spec, content)
+
         if not payload.frames:
             raise VlmClientError(f"{payload.chain_id}/{payload.step_id}: no frames in payload")
         for frame in payload.frames:
@@ -100,7 +109,6 @@ class OpenAICompatibleClient:
                     "(replay fixtures cannot be sent to a real model)"
                 )
 
-        content: list[dict[str, Any]] = []
         if payload.kind == "image":
             content.append(_image_part(payload.frames[-1].data))
         else:
@@ -109,7 +117,9 @@ class OpenAICompatibleClient:
                 content.append({"type": "text", "text": f"Frame {i} (+{frame.ts - first_ts:.1f}s):"})
                 content.append(_image_part(frame.data))
         content.append({"type": "text", "text": payload.prompt})
+        return self._body(spec, content)
 
+    def _body(self, spec: ModelSpec, content: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "model": spec.model,
             "messages": [{"role": "user", "content": content}],
@@ -121,3 +131,11 @@ class OpenAICompatibleClient:
 def _image_part(jpeg: bytes) -> dict[str, Any]:
     b64 = base64.b64encode(jpeg).decode("ascii")
     return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+
+
+def _video_part(mp4: bytes) -> dict[str, Any]:
+    # Raw base64, not a data: URL. llama.cpp's input_video path decodes the
+    # whole string as base64 (the data:-URL parsing belongs to image_url only),
+    # so a prefixed value turns into a few garbage bytes and "failed to decode
+    # buffer as either image/audio/video".
+    return {"type": "input_video", "input_video": {"data": base64.b64encode(mp4).decode("ascii")}}

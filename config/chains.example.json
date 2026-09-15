@@ -8,14 +8,17 @@
     },
     "nemotron-omni": {
       "type": "openai-compatible",
-      "endpoint": "http://localhost:4000/v1",
-      "model": "nemotron-3-nano-omni-30b-a3b",
+      "endpoint": "http://localhost:8080/v1",
+      "model": "nemotron-omni",
       "capabilities": ["image", "image_sequence", "video_clip"]
     }
   },
 
   "cameras": {
-    "driveway": { "source": "fixtures/private/driveway-loop.mp4" },
+    "driveway": {
+      "source": "rtsp://localhost:8554/driveway",
+      "clips": { "playback": "http://localhost:9996", "path": "driveway" }
+    },
     "living-room": { "source": "fixtures/private/living-room.mp4", "tier1": "mediapipe-hands" }
   },
 
@@ -63,9 +66,23 @@
           "timeout_s": 60,
           "prompt": "These frames follow a grey van parking in the driveway. Does a person in a reflective vest get out, take a package from the van, and head toward the house? Answer exactly one of: DELIVERY_IN_PROGRESS, PERSON_NO_PACKAGE, NOBODY_YET.",
           "outcomes": {
-            "DELIVERY_IN_PROGRESS": { "action": { "type": "notify", "message": "Amazon delivery arriving" } },
+            "DELIVERY_IN_PROGRESS": { "next": "confirm-delivery" },
             "PERSON_NO_PACKAGE": { "action": { "type": "notify", "message": "Unknown grey van in driveway" } },
             "NOBODY_YET": { "retry_in_s": 5 }
+          }
+        },
+        {
+          "id": "confirm-delivery",
+          "model": "nemotron-omni",
+          "payload": "video_clip",
+          "priority": 40,
+          "timeout_s": 300,
+          "window": { "before_s": 5, "after_s": 30 },
+          "prompt": "This clip shows a delivery driver at the front of a house. Watch the whole clip. Did the driver bring a package TO the house and leave it there, or take a package AWAY from the house, or neither? Picking a package out of the delivery van counts as bringing it. Answer exactly one of: DELIVERED, TAKEN, NEITHER.",
+          "outcomes": {
+            "DELIVERED": { "action": { "type": "notify", "message": "Package delivered" } },
+            "TAKEN": { "action": { "type": "notify", "message": "A package was taken from the porch" } },
+            "NEITHER": { "action": { "type": "notify", "message": "Delivery driver visited, no package seen" } }
           }
         },
         {
@@ -77,9 +94,23 @@
           "window": { "before_s": 2, "after_s": 20, "frames": 8 },
           "prompt": "These frames follow a black Tacoma parking. Watch who exits and from which door. Does a man exit from the driver's side, or a woman, or has nobody exited yet? Answer exactly one of: MAN_DRIVER_SIDE, WOMAN, NOBODY_YET.",
           "outcomes": {
-            "MAN_DRIVER_SIDE": { "action": { "type": "notify", "message": "Brother is stopping by" } },
+            "MAN_DRIVER_SIDE": { "next": "count-visitors" },
             "WOMAN": { "action": { "type": "notify", "message": "Sister-in-law is stopping by" } },
             "NOBODY_YET": { "retry_in_s": 5 }
+          }
+        },
+        {
+          "id": "count-visitors",
+          "model": "nemotron-omni",
+          "payload": "video_clip",
+          "priority": 40,
+          "timeout_s": 300,
+          "window": { "before_s": 5, "after_s": 40 },
+          "prompt": "This clip shows a black pickup truck that has just parked in a driveway. Watch the whole clip. How many people get out of the truck, and do they walk toward the house? Answer exactly one of: ONE_TO_HOUSE, TWO_TO_HOUSE, NOBODY_LEFT_TRUCK.",
+          "outcomes": {
+            "ONE_TO_HOUSE": { "action": { "type": "notify", "message": "Brother is at the door" } },
+            "TWO_TO_HOUSE": { "action": { "type": "notify", "message": "Brother and sister-in-law are at the door" } },
+            "NOBODY_LEFT_TRUCK": { "retry_in_s": 10 }
           }
         }
       ]

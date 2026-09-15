@@ -83,6 +83,7 @@ def test_capability_gate_passes_when_declared():
     data["models"]["vlm"]["capabilities"] = ["image", "video_clip"]
     data["chains"][0]["steps"][0]["payload"] = "video_clip"
     data["chains"][0]["window"] = {"before_s": 2, "after_s": 8, "frames": 6}  # chain-level default
+    data["cameras"]["driveway"]["clips"] = {"playback": "http://rec:9996", "path": "driveway"}
     config = Config.from_dict(data)
     assert config.chain("arrivals").window_for(config.chain("arrivals").steps[0]).after_s == 8
 

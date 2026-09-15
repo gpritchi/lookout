@@ -52,11 +52,22 @@ class ModelSpec(BaseModel):
     api_key_env: str | None = None
 
 
+class ClipsSpec(BaseModel):
+    """Where to fetch recorded footage of a camera for `video_clip` payloads:
+    a MediaMTX playback endpoint and the path name it records under."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    playback: str  # e.g. http://recorder:9996
+    path: str  # the MediaMTX path, e.g. "driveway"
+
+
 class CameraSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: str  # file path or RTSP URI; whatever OpenCV VideoCapture accepts
     tier1: str = "yolo"  # which tier-1 source type feeds this camera
+    clips: ClipsSpec | None = None  # required by any chain step with a video_clip payload
 
 
 class Tier1Spec(BaseModel):
@@ -234,7 +245,10 @@ class ChainSpec(BaseModel):
     # would otherwise hold the chain forever and block the next real trigger
     # (seen live 2026-09-14: a seam-triggered run sat on retries while the
     # actual arrival went by as "already active, ignoring").
-    max_age_s: float = Field(default=300.0, gt=0)
+    # Size it for the chain's slowest path: a clip step can spend a minute
+    # waiting for its window and three more in inference, and an answer that
+    # lands after the run was abandoned is dropped as stale (seen live).
+    max_age_s: float = Field(default=600.0, gt=0)
     comment: str | None = None
 
     @model_validator(mode="after")
@@ -306,7 +320,7 @@ class Config(BaseModel):
                     f"chain '{chain.id}' is bound to camera '{chain.camera}', "
                     f"which is not in cameras {sorted(self.cameras)}"
                 )
-
+            camera = self.cameras[chain.camera]
             step_ids = {step.id for step in chain.steps}
             for step in chain.steps:
                 model = self.models.get(step.model)
@@ -319,6 +333,11 @@ class Config(BaseModel):
                     raise ConfigError(
                         f"chain '{chain.id}' step '{step.id}' sends payload '{step.payload}' "
                         f"to model '{step.model}', which only accepts {model.capabilities}"
+                    )
+                if step.payload == "video_clip" and camera.clips is None:
+                    raise ConfigError(
+                        f"chain '{chain.id}' step '{step.id}' needs a video_clip of camera "
+                        f"'{chain.camera}', but that camera has no `clips` source configured"
                     )
                 for answer, outcome in step.outcomes.items():
                     if outcome.next is not None and outcome.next not in step_ids:
