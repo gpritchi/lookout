@@ -9,7 +9,7 @@ This is a work in progress. The Frigate side is a stub, the Home Assistant webho
 Use cases I'm working on:
 - Hand gestures to control smart home stuff, like 2 fingers to turn on TV and open Netflix, 3 fingers for Prime Video, "ok" hand gesture to turn it all off (basic CPU or iGPU model can handle this)
 - Using the specific make/model of vehicle to determine who has arrived. Facial detection at a distance with mediocre quality video can't tell my wife apart from her sister, but she has a black Tacoma and we don't. Escalating to a smarter model to determine the exact vehicle allows me to be notified her sister is at the door, without it erroneously triggering every time my wife walks up.
-- Further escalation can be made to a model that can actually "watch videos", sound included, which is cheaper per second of footage and a lot simpler than frame by frame "seeing" plus some separate audio "hearing" model. For this I tested with Nemotron-3-Nano-Omni-30B-A3B-Reasoning. This part gets _much_ slower on my hardware. I use it for checking someone delivered a package versus stealing one, and the plan is for it to hear the doorbell too, which isn't working yet (see Limitations).
+- Further escalation can be made to a model that can actually "watch videos", sound included, which is cheaper per second of footage and a lot simpler than frame by frame "seeing" plus some separate audio "hearing" model. For this I tested with Nemotron-3-Nano-Omni-30B-A3B-Reasoning. This part gets _much_ slower on my hardware. I use it for checking someone delivered a package versus stealing one, and it hears the doorbell too (see Limitations for what that cost to get working).
 
 The AI written README below gets into much more detail on how this works.
 
@@ -125,7 +125,7 @@ runtime surprise.
   "camera": "driveway",
   "trigger": { "label": ["car", "truck"], "priority": 10 },
   "window":  { "before_s": 2, "after_s": 8, "frames": 6 },
-  "max_age_s": 300,
+  "max_age_s": 900,
   "steps": [ ... ]
 }
 ```
@@ -246,15 +246,16 @@ Three honest points.
   against the OpenAI schema (LiteLLM does) rejects that part, so the clip
   model's `endpoint` points at the server directly. Per-model endpoints exist
   for exactly this.
-- The audio never made it. The fork's build I ran logged "failed to decode
-  the video's audio track — audio track skipped, frames only" for every
-  recorder clip, so every live Nemotron answer in this write-up was reached
-  from frames alone. The cause is in the fork, not here: its audio pass
-  demuxes a buffer over ffmpeg's `cache:pipe:0` with the video discarded,
-  and the mov demuxer's seeks yield no samples for a well-formed MP4. A
-  patched build that spools the buffer to a temp file exists in my cluster
-  repo and had not been rolled out when this was written. The engine's
-  "clip with audio" step is real; the model that heard it is not yet.
+- The audio only just made it. The fork's build I first ran logged "failed to
+  decode the video's audio track — audio track skipped, frames only" for every
+  recorder clip, so the first round of live Nemotron answers was reached from
+  frames alone. The cause was in the fork, not here: its audio pass demuxed a
+  buffer over ffmpeg's `cache:pipe:0` with the video discarded, and the mov
+  demuxer's seeks yield no samples for a well-formed MP4. A 30-line patch that
+  spools the buffer to a temp file fixed it. Verified on a recorder clip: asked
+  only what it heard, the model answered "a man speaks the words 'alarm' and
+  'doorbell' while a doorbell chimes". Audio costs about 12 prompt tokens per
+  second of clip on top of the video and roughly 5% more wall time.
 - Clips are slow. Thirty seconds of video at the fork's sampling is about
   5,000 prompt tokens; on a 32 GB MI50 over Vulkan that's two and a half
   minutes. The video step is the slow tier by design: low priority, long
