@@ -1,0 +1,58 @@
+# Build the lookout image and push it to a registry.
+#
+# Runs on a self-hosted runner named by the RUNNER repository variable, and
+# pushes to the REGISTRY variable. Both are Actions variables set in the repo's
+# settings, not in this file, so the workflow reads the same on any fork or
+# clone: point the two variables at your own runner and registry and it works.
+# The registry credential arrives as REGISTRY_USER / REGISTRY_PASSWORD in the
+# runner's environment; nothing is stored in GitHub.
+#
+# Triggers only on pushes to main and by hand. Deliberately no pull_request
+# trigger: this repo is public and the runner is on a private network, and a
+# workflow from a fork must never run there.
+name: build image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - pyproject.toml
+      - uv.lock
+      - src/**
+      - config/**
+      - fixtures/sample/**
+      - README.md
+      - .github/workflows/build-image.yml
+  workflow_dispatch:
+
+concurrency:
+  group: build-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ${{ vars.RUNNER }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to the registry
+        run: printf '%s' "$REGISTRY_PASSWORD" | docker login "${{ vars.REGISTRY }}" -u "$REGISTRY_USER" --password-stdin
+
+      - name: Build
+        run: |
+          docker build \
+            -t "${{ vars.REGISTRY }}/lookout:sha-${GITHUB_SHA::7}" \
+            -t "${{ vars.REGISTRY }}/lookout:main" \
+            .
+
+      - name: Push
+        run: |
+          docker push "${{ vars.REGISTRY }}/lookout:sha-${GITHUB_SHA::7}"
+          docker push "${{ vars.REGISTRY }}/lookout:main"
+
+      - name: Log out
+        if: always()
+        run: docker logout "${{ vars.REGISTRY }}"

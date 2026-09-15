@@ -1,0 +1,28 @@
+# Run the test suite on every push, on the self-hosted runner named by the
+# RUNNER repository variable. Same reasoning as build-image.yml: no
+# pull_request trigger, because a fork's workflow must never reach a private
+# runner. Branch pushes from this repo are what gets tested, which is how the
+# PRs here are made.
+name: tests
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ${{ vars.RUNNER }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Test
+        run: uv run pytest -q -W error
