@@ -47,6 +47,9 @@ class ModelSpec(BaseModel):
     endpoint: str
     model: str
     capabilities: list[Capability] = Field(min_length=1)
+    # Name of an environment variable holding a bearer token, if the endpoint
+    # wants one. The key itself never lives in config.
+    api_key_env: str | None = None
 
 
 class CameraSpec(BaseModel):
@@ -226,6 +229,12 @@ class ChainSpec(BaseModel):
     steps: list[StepSpec] = Field(default_factory=list)
     on_trigger: OnTriggerSpec | None = None
     window: WindowSpec | None = None
+    # How long a run may live from its trigger before the engine gives up on
+    # it. Bounds `retry_in_s` loops: a step that keeps answering NOBODY_YET
+    # would otherwise hold the chain forever and block the next real trigger
+    # (seen live 2026-09-14: a seam-triggered run sat on retries while the
+    # actual arrival went by as "already active, ignoring").
+    max_age_s: float = Field(default=300.0, gt=0)
     comment: str | None = None
 
     @model_validator(mode="after")

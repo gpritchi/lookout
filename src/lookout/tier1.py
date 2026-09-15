@@ -23,6 +23,7 @@ is the video's own clock; for live sources it is the wall clock.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -211,6 +212,11 @@ class VideoSource:
     def stream(self) -> Iterator[Frame | DetectionEvent]:
         offset = 0.0
         while True:
+            if self.uri.startswith("rtsp://"):
+                # RTSP over TCP unless the caller chose otherwise: UDP loses
+                # packets over anything but a clean LAN, and lost packets in an
+                # H.264/H.265 stream are corrupt frames for the detector.
+                os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
             cap = cv2.VideoCapture(int(self.uri) if self.uri.isdigit() else self.uri)
             if not cap.isOpened():
                 raise RuntimeError(f"cannot open video source {self.uri!r}")

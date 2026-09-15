@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -169,29 +170,86 @@ def run_replay(
     return report
 
 
-def run_live(config: Config, source: Source, model: Callable[[InferenceJob], str], sink: ActionSink | None = None) -> None:
-    """Wall-clock run: the worker on its own thread, the loop pacing itself to
-    the stream's timestamps. Used once a real source and client exist; kept
-    here so the two modes visibly share one engine."""
+def run_live(
+    config: Config,
+    sources: dict[str, Source],
+    model: Callable[[InferenceJob], str],
+    sink: ActionSink | None = None,
+    max_seconds: float = 0.0,
+    stop_after_actions: int = 0,
+    trace: Callable[[str], None] | None = None,
+) -> RunReport:
+    """Wall-clock run against live sources. Each source streams on its own
+    thread into the engine; the worker runs inference on another; the main
+    thread ticks the engine until a stop condition: `max_seconds` elapsed,
+    `stop_after_actions` actions fired (a test that wants "the first delivery"
+    and nothing more), or Ctrl-C.
+
+    Timestamps are the sources' own (wall clock for RTSP), so the engine's
+    clock is the same wall clock offset to start at 0, and every source must
+    use that same clock — VideoSource does when given `clock`.
+    """
     sink = sink if sink is not None else MockSink()
+    report = RunReport()
     scheduler = Scheduler()
     buffers = build_buffers(config)
     start = time.monotonic()
-    engine = Engine(config, scheduler, sink, buffers, clock=lambda: time.monotonic() - start)
-    worker = Worker(scheduler, list(config.models), run=model, on_result=engine.on_result, on_error=engine.on_error)
+
+    def clock() -> float:
+        return time.monotonic() - start
+
+    def _trace(line: str) -> None:
+        report.trace.append(line)
+        (trace or (lambda s: log.info("%s", s)))(line)
+
+    engine = Engine(config, scheduler, sink, buffers, clock, trace=_trace)
+
+    def on_result(job: InferenceJob, answer: str) -> None:
+        report.inference_calls += 1
+        engine.on_result(job, answer)
+
+    worker = Worker(scheduler, list(config.models), run=model, on_result=on_result, on_error=engine.on_error)
+    stop = threading.Event()
+
+    def pump(name: str, source: Source) -> None:
+        try:
+            for item in source.stream():
+                if stop.is_set():
+                    break
+                if isinstance(item, Frame):
+                    engine.on_frame(item)
+                else:
+                    engine.on_event(item)
+        except Exception:  # noqa: BLE001 — a dead camera must not take the loop down silently
+            log.exception("source %s stopped", name)
+        finally:
+            _trace(f"[{clock():7.2f}] source {name}: stream ended")
+
+    threads = [threading.Thread(target=pump, args=(n, s), name=f"source[{n}]", daemon=True) for n, s in sources.items()]
     worker.start()
+    for t in threads:
+        t.start()
     try:
-        for item in source.stream():
-            lag = item.ts - (time.monotonic() - start)
-            if lag > 0:
-                time.sleep(lag)
-            if isinstance(item, Frame):
-                engine.on_frame(item)
-            else:
-                engine.on_event(item)
-            engine.tick()
-        while engine.active or scheduler.pending():
+        while not stop.is_set():
             time.sleep(0.25)
             engine.tick()
+            fired = len(sink.fired) if isinstance(sink, MockSink) else 0
+            if stop_after_actions and fired >= stop_after_actions:
+                _trace(f"[{clock():7.2f}] stopping: {fired} action(s) fired")
+                break
+            if max_seconds and clock() >= max_seconds:
+                _trace(f"[{clock():7.2f}] stopping: {max_seconds:.0f}s elapsed")
+                break
+            if all(not t.is_alive() for t in threads) and not engine.active and not scheduler.pending():
+                break
+    except KeyboardInterrupt:
+        _trace(f"[{clock():7.2f}] stopping: interrupted")
     finally:
+        stop.set()
         worker.stop()
+    report.final_ts = clock()
+    if isinstance(sink, MockSink):
+        for action, ctx in sink.fired:
+            extras = ", ".join(f"{k}={v}" for k, v in action.model_dump(exclude={"type"}).items())
+            report.actions.append(f"{action.type}({extras}) <- {ctx.chain_id} on {ctx.camera}")
+    return report
