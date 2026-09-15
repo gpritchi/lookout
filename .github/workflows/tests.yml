@@ -21,6 +21,11 @@ jobs:
           python-version: "3.13"
           enable-cache: true
 
+      # cv2 links libGL and glib even when no window is ever opened; the runner
+      # image is bare Ubuntu. Same two packages the Dockerfile installs.
+      - name: System libraries for OpenCV
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libgl1 libglib2.0-0
+
       - name: Install
         run: uv sync --frozen
 
