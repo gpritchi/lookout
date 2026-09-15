@@ -92,9 +92,14 @@ wait on a clip and a proxy respectively, so they come after.
 | 3 | Priority scheduler and worker (per-model queues, worker over a model subset, timing wrapper, tests) |
 | 4 | Chain engine, ReplaySource, mock actions, Dockerfile; first offline end-to-end run |
 | 5 | Tier-1 video source: YOLO export, OpenCV capture, debounce (HARD CAP 1h — take the fallback ladder rather than overrun) |
-| 6 | VLM client against the proxy, driveway prompts, live end-to-end on the clip |
+| 6 | VLM client against the proxy, driveway prompts, live end-to-end on an RTSP camera |
+| 6b | Video clips from a recorder, the Omni step, a worker per model (stretch, taken) |
 | 7 | `/metrics` endpoint, optional HA webhook sink |
 | 8 | README a stranger can run, sample fixtures, write-up drafted from the journal |
+
+All eight landed. Phase 6b was the stretch the plan allowed for "if everything above is
+done and verified"; it was, and it produced the two most useful findings of the build
+(a worker per model, and the age limit eating the slow tier).
 
 Working-and-verified beats feature-complete. If behind at any checkpoint, cut from the
 bottom of the current block, not from verification. The gesture chains (tv-* in the
