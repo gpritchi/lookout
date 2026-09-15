@@ -178,6 +178,15 @@ def test_unknown_fields_rejected():
         Config.from_dict(data)
 
 
+def test_trigger_accepts_one_label_or_several():
+    single = Config.from_dict(minimal()).chain("arrivals").trigger
+    assert single.labels == ["car"] and single.matches("car") and not single.matches("truck")
+    data = minimal()
+    data["chains"][0]["trigger"]["label"] = ["car", "truck"]
+    multi = Config.from_dict(data).chain("arrivals").trigger
+    assert multi.matches("truck") and not multi.matches("person")
+
+
 def test_original_dict_not_mutated():
     data = minimal()
     before = deepcopy(data)

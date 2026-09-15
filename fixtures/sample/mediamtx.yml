@@ -1,0 +1,48 @@
+# A fake camera for developing against lookout without a real one.
+#
+# MediaMTX (https://github.com/bluenviron/mediamtx) plays a clip on a loop and
+# publishes it over RTSP, so lookout consumes rtsp://<host>:8554/driveway exactly
+# as it would a real camera: wall-clock timestamps, a live stream that never
+# ends, and an arrival every few minutes. Recording is on so the playback API
+# can hand back a time range as an MP4, which is how video_clip payloads are
+# built without lookout keeping raw video itself.
+#
+#   docker run -d --name mediamtx \
+#     -p 8554:8554 -p 9996:9996 \
+#     -v $PWD/mediamtx.yml:/mediamtx.yml:ro \
+#     -v /path/to/clips:/clips:ro \
+#     -v /path/to/recordings:/recordings \
+#     bluenviron/mediamtx:latest-ffmpeg
+#
+# Two things you'll notice that a real camera doesn't do: the scene cuts where
+# the loop restarts (the debouncer sees a spurious arrival there), and the
+# after_s waits in your chains are now real seconds.
+
+logLevel: info
+
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+rtmp: no
+hls: no
+webrtc: no
+srt: no
+api: no
+playback: yes
+playbackAddress: :9996
+
+pathDefaults:
+  record: yes
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordSegmentDuration: 60s
+  recordDeleteAfter: 24h
+
+paths:
+  driveway:
+    # -re paces to real time; -stream_loop -1 loops forever; -c copy keeps the
+    # original codec and any audio track untouched.
+    runOnInit: >
+      ffmpeg -hide_banner -loglevel warning -re -stream_loop -1
+      -i /clips/driveway.mp4 -c copy -f rtsp rtsp://localhost:8554/driveway
+    runOnInitRestart: yes

@@ -23,7 +23,11 @@
     "model": "yolov8n",
     "backend": "openvino",
     "min_confidence": 0.5,
-    "debounce_frames": 3
+    "count_confidence": 0.3,
+    "min_box_frac": 0.004,
+    "debounce_frames": 3,
+    "analysis_fps": 4,
+    "frame_fps": 2
   },
 
   "actions": {
@@ -35,7 +39,7 @@
     {
       "id": "driveway-arrivals",
       "camera": "driveway",
-      "trigger": { "label": "car", "priority": 10 },
+      "trigger": { "label": ["car", "truck"], "priority": 10 },
       "window": { "before_s": 2, "after_s": 8, "frames": 6 },
       "steps": [
         {

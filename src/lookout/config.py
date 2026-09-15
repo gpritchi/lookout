@@ -47,6 +47,9 @@ class ModelSpec(BaseModel):
     endpoint: str
     model: str
     capabilities: list[Capability] = Field(min_length=1)
+    # Name of an environment variable holding a bearer token, if the endpoint
+    # wants one. The key itself never lives in config.
+    api_key_env: str | None = None
 
 
 class CameraSpec(BaseModel):
@@ -57,12 +60,41 @@ class CameraSpec(BaseModel):
 
 
 class Tier1Spec(BaseModel):
+    """The cheap detector and how often it looks.
+
+    `analysis_fps` is how many frames per second the detector sees; the rest are
+    skipped. `frame_fps` is how many per second go into the ring buffer for
+    escalation windows, stored as JPEG no wider than `frame_max_width`.
+    `debounce_frames` is the hysteresis: a label's count must sit above its
+    baseline for that many analysed frames to fire, and below it for that many
+    to lower the baseline again.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     model: str = "yolov8n"
     backend: Literal["openvino", "torch"] = "openvino"
+    device: str | None = None  # OpenVINO device (CPU, GPU) or torch device (cpu, mps); None = default
+    imgsz: int = Field(default=640, ge=64)
     min_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Objects are COUNTED down to this confidence, so a parked car hovering
+    # around min_confidence does not flicker in and out and look like an
+    # arrival. Only a newcomer at or above min_confidence FIRES.
+    count_confidence: float = Field(default=0.3, ge=0.0, le=1.0)
+    # Ignore boxes smaller than this fraction of the frame area: street traffic
+    # at the far edge of a driveway camera is tiny and never worth a chain.
+    min_box_frac: float = Field(default=0.0, ge=0.0, le=1.0)
     debounce_frames: int = Field(default=3, ge=1)
+    analysis_fps: float = Field(default=4.0, gt=0)
+    frame_fps: float = Field(default=2.0, gt=0)
+    frame_max_width: int = Field(default=1280, ge=64)
+    jpeg_quality: int = Field(default=85, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _count_not_above_fire(self) -> "Tier1Spec":
+        if self.count_confidence > self.min_confidence:
+            raise ValueError("tier1.count_confidence must not exceed tier1.min_confidence")
+        return self
 
 
 class ActionsSpec(BaseModel):
@@ -95,9 +127,16 @@ class TriggerSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    label: str
+    label: str | list[str]  # one label, or any of several (COCO flips a pickup between car and truck)
     priority: int = 0
     held_frames: int | None = Field(default=None, ge=1)
+
+    @property
+    def labels(self) -> list[str]:
+        return [self.label] if isinstance(self.label, str) else self.label
+
+    def matches(self, label: str) -> bool:
+        return label in self.labels
 
 
 class OutcomeSpec(BaseModel):
@@ -190,6 +229,12 @@ class ChainSpec(BaseModel):
     steps: list[StepSpec] = Field(default_factory=list)
     on_trigger: OnTriggerSpec | None = None
     window: WindowSpec | None = None
+    # How long a run may live from its trigger before the engine gives up on
+    # it. Bounds `retry_in_s` loops: a step that keeps answering NOBODY_YET
+    # would otherwise hold the chain forever and block the next real trigger
+    # (seen live 2026-09-14: a seam-triggered run sat on retries while the
+    # actual arrival went by as "already active, ignoring").
+    max_age_s: float = Field(default=300.0, gt=0)
     comment: str | None = None
 
     @model_validator(mode="after")

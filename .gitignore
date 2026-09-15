@@ -22,3 +22,9 @@ __pycache__/
 
 # Secrets / local env
 .env
+# Deployment-specific configs (real camera URLs, real proxy) stay local; the
+# committed example is the template.
+config/*.local.json
+
+# OS noise
+.DS_Store

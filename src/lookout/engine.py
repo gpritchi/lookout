@@ -52,6 +52,7 @@ class StepPayload:
     step_id: str
     generation: int
     center_ts: float
+    timeout_s: float = 60.0  # the step's budget; the client uses it as its request timeout
 
 
 @dataclass
@@ -100,7 +101,7 @@ class Engine:
         # event reaches here the intent filter has already been applied.
         with self._lock:
             for chain in self.config.chains:
-                if chain.camera != event.camera or chain.trigger.label != event.label:
+                if chain.camera != event.camera or not chain.trigger.matches(event.label):
                     continue
                 if chain.id in self._runs:
                     self._trace(f"[{event.ts:7.2f}] {chain.id}: already active, ignoring {event.label}")
@@ -155,7 +156,14 @@ class Engine:
         now = self.clock()
         with self._lock:
             for run in list(self._runs.values()):
-                if not run.dispatched:
+                if now - run.trigger.ts > run.chain.max_age_s:
+                    dropped = self.scheduler.discard(run.chain.id)
+                    self._trace(
+                        f"[{now:7.2f}] {run.chain.id}/{run.step.id}: run is older than max_age_s="
+                        f"{run.chain.max_age_s:g} ({dropped} queued job(s) dropped), giving up"
+                    )
+                    self._finish(run)
+                elif not run.dispatched:
                     self._maybe_dispatch(run)
                 elif run.deadline is not None and now > run.deadline:
                     dropped = self.scheduler.discard(run.chain.id)
@@ -178,6 +186,7 @@ class Engine:
         with self._lock:
             times = [r.due_at for r in self._runs.values() if not r.dispatched]
             times += [r.deadline for r in self._runs.values() if r.dispatched and r.deadline is not None]
+            times += [r.trigger.ts + r.chain.max_age_s for r in self._runs.values()]
             return min(times) if times else None
 
     # -- internals ------------------------------------------------------------
@@ -208,6 +217,7 @@ class Engine:
         payload = StepPayload(
             kind=step.payload, prompt=step.prompt, frames=tuple(frames), camera=chain.camera,
             chain_id=chain.id, step_id=step.id, generation=run.generation, center_ts=run.center_ts,
+            timeout_s=step.timeout_s,
         )
         self.scheduler.submit(
             InferenceJob(model=step.model, priority=step.priority, chain_id=chain.id, step_id=step.id, payload=payload)
