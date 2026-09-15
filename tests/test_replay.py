@@ -44,7 +44,7 @@ def test_shipped_fixture_end_to_end():
     assert report.actions == [
         "ha_webhook(service=tv_netflix_on) <- tv-netflix on living-room",
         "notify(message=Package delivered) <- driveway-arrivals on driveway",
-        "notify(message=Brother and sister-in-law are at the door) <- driveway-arrivals on driveway",
+        "notify(message=Sister-in-law and her husband are at the door) <- driveway-arrivals on driveway",
     ]
     assert report.inference_calls == 7
     kinds = [(p.step_id, p.kind, len(p.frames)) for p in model.calls]

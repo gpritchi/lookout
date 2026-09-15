@@ -97,7 +97,7 @@
           "prompt": "These frames follow a black Tacoma parking. Watch who exits and from which door. Does a man exit from the driver's side, or a woman, or has nobody exited yet? Answer exactly one of: MAN_DRIVER_SIDE, WOMAN, NOBODY_YET.",
           "outcomes": {
             "MAN_DRIVER_SIDE": { "next": "count-visitors" },
-            "WOMAN": { "action": { "type": "notify", "message": "Sister-in-law is stopping by" } },
+            "WOMAN": { "action": { "type": "notify", "message": "Sister-in-law is at the door" } },
             "NOBODY_YET": { "retry_in_s": 5 }
           }
         },
@@ -110,8 +110,8 @@
           "window": { "before_s": 5, "after_s": 40 },
           "prompt": "This clip shows a black pickup truck that has just parked in a driveway. Watch the whole clip. How many people get out of the truck, and do they walk toward the house? Answer exactly one of: ONE_TO_HOUSE, TWO_TO_HOUSE, NOBODY_LEFT_TRUCK.",
           "outcomes": {
-            "ONE_TO_HOUSE": { "action": { "type": "notify", "message": "Brother is at the door" } },
-            "TWO_TO_HOUSE": { "action": { "type": "notify", "message": "Brother and sister-in-law are at the door" } },
+            "ONE_TO_HOUSE": { "action": { "type": "notify", "message": "Brother-in-law is at the door" } },
+            "TWO_TO_HOUSE": { "action": { "type": "notify", "message": "Sister-in-law and her husband are at the door" } },
             "NOBODY_LEFT_TRUCK": { "retry_in_s": 10 }
           }
         }
