@@ -1,3 +1,18 @@
+# Human README
+
+This is basically an AI-powered IFTTT (If This Then That) I wanted to write to exist between [Frigate](https://github.com/blakeblackshear/frigate) and [Home Assistant](https://github.com/home-assistant), to bridge more advanced chains/checks using increasingly powerful self-hosted AI models as needed. No testing has been done with cloud models.
+
+It's possible some of this functionality might already be natively included in those open source projects, I just wanted to build on it and use some spare computer hardware I have at home.
+
+This is a work in progress. The Frigate side is a stub, the Home Assistant webhook works but I have not wired an automation to it yet. I was testing with 2 clips from my own camera footage (one of a family member arriving in their Tacoma, another of the amazon delivery guy dropping something off), looping and pretending to be a live RTSP stream like a Eufy/Wyze/Reolink Cam. Integration functionality is not guaranteed.
+
+Use cases I'm working on:
+- Hand gestures to control smart home stuff, like 2 fingers to turn on TV and open Netflix, 3 fingers for Prime Video, "ok" hand gesture to turn it all off (basic CPU or iGPU model can handle this)
+- Using the specific make/model of vehicle to determine who has arrived. Facial detection at a distance with mediocre quality video can't tell my wife apart from her sister, but she has a black Tacoma and we don't. Escalating to a smarter model to determine the exact vehicle allows me to be notified her sister is at the door, without it erroneously triggering every time my wife walks up.
+- Further escalation can be made to a model that can actually "watch videos", sound included, which is cheaper per second of footage and a lot simpler than frame by frame "seeing" plus some separate audio "hearing" model. For this I tested with Nemotron-3-Nano-Omni-30B-A3B-Reasoning. This part gets _much_ slower on my hardware. I use it for checking someone delivered a package versus stealing one, and the plan is for it to hear the doorbell too, which isn't working yet (see Limitations).
+
+The AI written README below gets into much more detail on how this works.
+
 # lookout
 
 Tiered AI escalation for home camera feeds. A cheap local detector watches every
