@@ -73,6 +73,7 @@ def test_capability_gate_video_on_image_model():
     """THE test that makes model swap-out safe."""
     data = minimal()
     data["chains"][0]["steps"][0]["payload"] = "video_clip"
+    data["chains"][0]["steps"][0]["window"] = {"before_s": 2, "after_s": 8, "frames": 6}
     with pytest.raises(ConfigError, match=r"payload 'video_clip'.*model 'vlm'.*\['image'\]"):
         Config.from_dict(data)
 
@@ -81,7 +82,32 @@ def test_capability_gate_passes_when_declared():
     data = minimal()
     data["models"]["vlm"]["capabilities"] = ["image", "video_clip"]
     data["chains"][0]["steps"][0]["payload"] = "video_clip"
-    Config.from_dict(data)
+    data["chains"][0]["window"] = {"before_s": 2, "after_s": 8, "frames": 6}  # chain-level default
+    config = Config.from_dict(data)
+    assert config.chain("arrivals").window_for(config.chain("arrivals").steps[0]).after_s == 8
+
+
+def test_sequence_payload_requires_a_window():
+    data = minimal()
+    data["models"]["vlm"]["capabilities"] = ["image", "image_sequence"]
+    data["chains"][0]["steps"][0]["payload"] = "image_sequence"
+    with pytest.raises(ConfigError, match="no window"):
+        Config.from_dict(data)
+
+
+def test_buffer_seconds_is_deepest_lookback_per_camera():
+    data = minimal()
+    data["models"]["vlm"]["capabilities"] = ["image", "image_sequence"]
+    data["chains"][0]["window"] = {"before_s": 5, "after_s": 8, "frames": 4}
+    data["chains"][0]["steps"][0]["payload"] = "image_sequence"
+    data["chains"].append({
+        "id": "other", "camera": "driveway", "trigger": {"label": "truck"},
+        "steps": [{"id": "s", "model": "vlm", "payload": "image_sequence", "timeout_s": 5, "prompt": "?",
+                   "window": {"before_s": 12, "after_s": 1, "frames": 2}, "outcomes": {"X": {"end": True}}}],
+    })
+    config = Config.from_dict(data)
+    assert config.buffer_seconds("driveway") == 12
+    assert config.buffer_seconds("nonexistent") == 0
 
 
 def test_dangling_next_rejected():

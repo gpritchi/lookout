@@ -1,0 +1,8 @@
+# Canned tier-1 events for the offline demo. at_s is seconds from replay start.
+# Two driveway arrivals, one gesture in the living room while the first chain is
+# mid-flight, and a duplicate detection that the engine must ignore.
+{"at_s": 3.0, "camera": "driveway", "label": "car", "confidence": 0.91, "bbox": [412, 220, 880, 610]}
+{"at_s": 3.5, "camera": "driveway", "label": "car", "confidence": 0.93, "bbox": [410, 222, 884, 612]}
+{"at_s": 5.0, "camera": "driveway", "label": "person", "confidence": 0.71, "bbox": [500, 300, 560, 480]}
+{"at_s": 12.0, "camera": "living-room", "label": "gesture:three_fingers", "confidence": 0.97, "bbox": [300, 120, 380, 240]}
+{"at_s": 40.0, "camera": "driveway", "label": "car", "confidence": 0.89, "bbox": [390, 210, 900, 620]}

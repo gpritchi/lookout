@@ -131,10 +131,33 @@ class OutcomeSpec(BaseModel):
         return self
 
 
+class WindowSpec(BaseModel):
+    """How much of the stream around the trigger a step looks at.
+
+    Relative to the triggering event's timestamp: `before_s` seconds back,
+    `after_s` seconds forward, sampled evenly into `frames` frames. An `image`
+    payload ignores this and uses the trigger frame; `image_sequence` and
+    `video_clip` require it. `after_s` implies waiting: the engine cannot
+    dispatch the step until that much stream has been seen.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    before_s: float = Field(default=0.0, ge=0.0)
+    after_s: float = Field(default=0.0, ge=0.0)
+    frames: int = Field(default=1, ge=1)
+
+    @property
+    def span_s(self) -> float:
+        return self.before_s + self.after_s
+
+
 class StepSpec(BaseModel):
     """One escalation step: ask `model` about a `payload` built from the
     triggering event, wait up to `timeout_s`, map the answer through `outcomes`.
-    `priority` is the queue priority of the inference job (higher wins)."""
+    `priority` is the queue priority of the inference job (higher wins).
+    `window` says how much stream the payload covers; a chain-level `window`
+    is the default for steps that leave it out."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -145,6 +168,7 @@ class StepSpec(BaseModel):
     timeout_s: float = Field(gt=0)
     prompt: str
     outcomes: dict[str, OutcomeSpec] = Field(min_length=1)
+    window: WindowSpec | None = None
 
 
 class OnTriggerSpec(BaseModel):
@@ -165,6 +189,7 @@ class ChainSpec(BaseModel):
     trigger: TriggerSpec
     steps: list[StepSpec] = Field(default_factory=list)
     on_trigger: OnTriggerSpec | None = None
+    window: WindowSpec | None = None
     comment: str | None = None
 
     @model_validator(mode="after")
@@ -178,7 +203,29 @@ class ChainSpec(BaseModel):
             if step.id in seen:
                 raise ValueError(f"chain '{self.id}' has duplicate step id '{step.id}'")
             seen.add(step.id)
+            if step.payload != "image" and self.window_for(step) is None:
+                raise ValueError(
+                    f"chain '{self.id}' step '{step.id}' has payload '{step.payload}' but no window; "
+                    "set `window` on the step or the chain"
+                )
         return self
+
+    def window_for(self, step: StepSpec) -> WindowSpec | None:
+        """The step's own window, else the chain default, else None."""
+        return step.window if step.window is not None else self.window
+
+    def step(self, step_id: str) -> StepSpec:
+        for step in self.steps:
+            if step.id == step_id:
+                return step
+        raise KeyError(step_id)
+
+    @property
+    def buffer_seconds(self) -> float:
+        """How much stream this chain can ever look back over: the widest
+        window's before_s. Frames after the trigger accumulate as they arrive,
+        so after_s does not need buffering ahead of time."""
+        return max((w.before_s for w in (self.window_for(s) for s in self.steps) if w is not None), default=0.0)
 
 
 class Config(BaseModel):
@@ -240,6 +287,11 @@ class Config(BaseModel):
             if chain.id == chain_id:
                 return chain
         raise KeyError(chain_id)
+
+    def buffer_seconds(self, camera: str) -> float:
+        """Ring-buffer depth a camera needs: the deepest look-back any of its
+        chains asks for. Sized from config, nothing else to tune."""
+        return max((c.buffer_seconds for c in self.chains if c.camera == camera), default=0.0)
 
 
 def load_config(path: str | Path) -> Config:

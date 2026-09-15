@@ -1,0 +1,12 @@
+.git
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+notes
+unsanitized-notes
+fixtures/private
+*_openvino_model
+*.pt
+*.onnx
+.env

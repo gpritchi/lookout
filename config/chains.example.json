@@ -36,6 +36,7 @@
       "id": "driveway-arrivals",
       "camera": "driveway",
       "trigger": { "label": "car", "priority": 10 },
+      "window": { "before_s": 2, "after_s": 8, "frames": 6 },
       "steps": [
         {
           "id": "classify-vehicle",
@@ -69,6 +70,7 @@
           "payload": "image_sequence",
           "priority": 60,
           "timeout_s": 60,
+          "window": { "before_s": 2, "after_s": 20, "frames": 8 },
           "prompt": "These frames follow a black Tacoma parking. Watch who exits and from which door. Does a man exit from the driver's side, or a woman, or has nobody exited yet? Answer exactly one of: MAN_DRIVER_SIDE, WOMAN, NOBODY_YET.",
           "outcomes": {
             "MAN_DRIVER_SIDE": { "action": { "type": "notify", "message": "Brother is stopping by" } },

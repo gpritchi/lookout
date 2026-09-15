@@ -10,12 +10,29 @@ dependencies = [
     "pydantic>=2.9",
     "prometheus-client>=0.21",
     "httpx>=0.27",
+    # Direct only so [tool.uv.sources] below can pin them to the CPU wheel index;
+    # uv applies sources to direct dependencies, not transitive ones.
+    "torch>=2.4",
+    "torchvision>=0.19",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3",
 ]
+
+# Ultralytics depends on torch. On Linux the default index resolves the CUDA
+# build plus several GB of NVIDIA libraries that nothing here uses (tier-1 is
+# OpenVINO/CPU, tier-2 is a remote endpoint). Pin Linux to the CPU wheels so
+# the Docker image stays small; macOS keeps the default (MPS-capable) wheel.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
