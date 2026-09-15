@@ -46,6 +46,7 @@
       "camera": "driveway",
       "trigger": { "label": ["car", "truck"], "priority": 10 },
       "window": { "before_s": 2, "after_s": 8, "frames": 6 },
+      "max_age_s": 900,
       "steps": [
         {
           "id": "classify-vehicle",
@@ -78,7 +79,7 @@
           "model": "nemotron-omni",
           "payload": "video_clip",
           "priority": 40,
-          "timeout_s": 300,
+          "timeout_s": 480,
           "window": { "before_s": 5, "after_s": 30 },
           "prompt": "This clip shows a delivery driver at the front of a house. Watch the whole clip. Did the driver bring a package TO the house and leave it there, or take a package AWAY from the house, or neither? Picking a package out of the delivery van counts as bringing it. Answer exactly one of: DELIVERED, TAKEN, NEITHER.",
           "outcomes": {
@@ -106,7 +107,7 @@
           "model": "nemotron-omni",
           "payload": "video_clip",
           "priority": 40,
-          "timeout_s": 300,
+          "timeout_s": 480,
           "window": { "before_s": 5, "after_s": 40 },
           "prompt": "This clip shows a black pickup truck that has just parked in a driveway. Watch the whole clip. How many people get out of the truck, and do they walk toward the house? Answer exactly one of: ONE_TO_HOUSE, TWO_TO_HOUSE, NOBODY_LEFT_TRUCK.",
           "outcomes": {
