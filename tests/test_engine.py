@@ -160,6 +160,25 @@ def test_timeout_resets_chain_drops_queued_job_and_ignores_late_answer():
     assert rig.scheduler.pending("vlm") == 0  # stale answer did not advance anything
 
 
+def test_run_older_than_max_age_is_abandoned_and_chain_rearms():
+    """A step that keeps answering NOBODY_YET must not hold the chain forever."""
+    rig = Rig()
+    rig.config.chain("arrivals").max_age_s = 40
+    rig.frames("driveway", 3.0)
+    rig.event("driveway", "car", 3.0)
+    rig.engine.on_result(rig.pop(), "VAN")
+    rig.frames("driveway", 11.0)
+    for _ in range(2):
+        rig.engine.on_result(rig.pop(), "NOBODY_YET")
+        rig.frames("driveway", rig.engine.next_wakeup())
+    assert rig.engine.active == ["arrivals"]
+    rig.frames("driveway", 44.0)  # 3.0 + 40 passed
+    assert rig.engine.active == []
+    assert any("giving up" in line for line in rig.trace)
+    rig.event("driveway", "car", 45.0)
+    assert rig.engine.active == ["arrivals"]  # a new trigger is accepted again
+
+
 def test_retrigger_while_active_is_ignored():
     rig = Rig()
     rig.frames("driveway", 3.0)
