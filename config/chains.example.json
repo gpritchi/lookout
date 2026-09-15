@@ -38,6 +38,8 @@
     "ha_webhook_url": null
   },
 
+  "metrics": { "port": 9108 },
+
   "chains": [
     {
       "id": "driveway-arrivals",

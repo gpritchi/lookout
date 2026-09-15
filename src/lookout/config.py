@@ -112,13 +112,24 @@ class ActionsSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sink: Literal["mock", "ha_webhook"] = "mock"
-    ha_webhook_url: str | None = None
+    ha_webhook_url: str | None = None  # https://<ha>/api/webhook/<id>
+    ha_timeout_s: float = Field(default=5.0, gt=0)
 
     @model_validator(mode="after")
     def _webhook_needs_url(self) -> "ActionsSpec":
         if self.sink == "ha_webhook" and not self.ha_webhook_url:
             raise ValueError("actions.sink is 'ha_webhook' but actions.ha_webhook_url is not set")
         return self
+
+
+class MetricsSpec(BaseModel):
+    """Serve prometheus_client's registry over HTTP. Off unless a port is set;
+    the histogram is recorded either way."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    port: int | None = Field(default=None, ge=1, le=65535)
+    host: str = "0.0.0.0"
 
 
 class ActionSpec(BaseModel):
@@ -294,6 +305,7 @@ class Config(BaseModel):
     cameras: dict[str, CameraSpec] = Field(min_length=1)
     tier1: Tier1Spec = Field(default_factory=Tier1Spec)
     actions: ActionsSpec = Field(default_factory=ActionsSpec)
+    metrics: MetricsSpec = Field(default_factory=MetricsSpec)
     chains: list[ChainSpec] = Field(min_length=1)
 
     @classmethod
