@@ -1,10 +1,46 @@
 """Latency instrumentation, from the first inference call onward.
 
-- prometheus_client Histogram `lookout_inference_seconds`, labels {model, tier}.
-- A context manager `timed(model, tier)` wrapping every inference call — tier-1
-  frames included, so the tiering claim in the write-up has real numbers.
-- start_http_server() for /metrics.
+One Histogram, `lookout_inference_seconds`, labelled {model, tier}. Every
+inference call — tier-1 detector frames included — runs inside `timed()`, so the
+write-up's tiering claim ("tier-1 is milliseconds, tier-2 is seconds") comes with
+real numbers rather than an assertion.
 
-By-host labels, Grafana dashboards, and multi-worker aggregation are documented
-future work; the label set is already shaped so adding {host} later is additive.
+The label set is deliberately small. By-host labels, Grafana dashboards, and
+multi-worker aggregation are future work; adding {host} later is additive.
+Serving the registry over HTTP (`/metrics`) is a separate concern and arrives with
+its own PR.
 """
+
+from __future__ import annotations
+
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from prometheus_client import Histogram
+
+# Buckets span two regimes on one axis: detector frames (a few ms to ~100 ms on
+# CPU) and VLM calls (seconds to a minute on a busy card). Finer than the
+# prometheus default at the top end, where the interesting tier-2 spread lives.
+_BUCKETS = (
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
+    1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0,
+)
+
+INFERENCE_SECONDS = Histogram(
+    "lookout_inference_seconds",
+    "Wall-clock seconds per inference call, by model and tier.",
+    labelnames=("model", "tier"),
+    buckets=_BUCKETS,
+)
+
+
+@contextmanager
+def timed(model: str, tier: str) -> Iterator[None]:
+    """Observe the wall-clock duration of the wrapped block. Records on error
+    too: a call that raised still cost the card its time."""
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        INFERENCE_SECONDS.labels(model=model, tier=tier).observe(time.perf_counter() - start)
