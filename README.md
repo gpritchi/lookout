@@ -118,7 +118,7 @@ runtime surprise.
 | `models` | name → endpoint, model id, `capabilities` (`image`, `image_sequence`, `video_clip`), optional `api_key_env` |
 | `cameras` | name → `source` URI, optional `clips` (a MediaMTX playback endpoint and path, required by any `video_clip` step) |
 | `tier1` | detector model and backend, confidence thresholds, debounce, analysis and buffer frame rates |
-| `actions` | `sink`: `mock` (logs what it would do) or `ha_webhook` with a URL |
+| `actions` | `sink`: `mock` (logs what it would do) or `ha_webhook` with `ha_webhook_url`, or `ha_webhook_url_env` naming a variable that holds it |
 | `chains` | trigger, steps, windows, outcomes; or `on_trigger` for a chain with no steps |
 
 ### A chain
