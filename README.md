@@ -74,6 +74,10 @@ docker build -t lookout .
 docker run --rm lookout
 ```
 
+The image carries the detector already exported to OpenVINO, so the live
+commands below run in it with no network access to fetch weights and no
+writable models directory.
+
 ### 2. A real camera, or a fake one
 
 lookout reads anything OpenCV can open: a file path, an RTSP URL, a device
@@ -187,8 +191,8 @@ intent filter. The tier boundary is empirical and movable in both directions.
 
 ## How it works
 
-- **`tier1.py`** — YOLOv8n via OpenVINO (exported on first run; PyTorch as the
-  fallback backend) over an OpenCV capture. Detections become events through
+- **`tier1.py`** — YOLOv8n via OpenVINO (baked into the image at build time;
+  exported on first run outside it; PyTorch as the fallback backend) over an OpenCV capture. Detections become events through
   count-rise hysteresis per label: fire when a label's count rises above its
   baseline and stays there, let the baseline follow the count back down. A
   parked car is scenery, not an arrival. Objects are counted down to a low

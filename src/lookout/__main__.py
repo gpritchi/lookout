@@ -8,12 +8,18 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 
 from lookout.config import ConfigError, load_config
 from lookout.events import ReplaySource
 from lookout.runtime import ScriptedModel, run_replay
+
+# The image bakes the detector into /app/models and sets this; on a laptop it's
+# unset and the working directory is used, as before.
+MODELS_DIR = os.environ.get("LOOKOUT_MODELS_DIR", ".")
+MODELS_DIR_HELP = "where <model>.pt and the OpenVINO export live (default: $LOOKOUT_MODELS_DIR or .)"
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -167,14 +173,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--config", required=True)
     p.add_argument("--camera", required=True, help="camera name from the config")
     p.add_argument("--source", help="override the camera's source URI (file, RTSP, or device index)")
-    p.add_argument("--models-dir", default=".", help="where <model>.pt and the OpenVINO export live")
+    p.add_argument("--models-dir", default=MODELS_DIR, help=MODELS_DIR_HELP)
     p.add_argument("--max-seconds", type=float, default=0, help="stop after this many seconds (live sources never end)")
     p.set_defaults(func=cmd_tier1)
 
     p = sub.add_parser("run", help="watch every camera live, escalate to the models, fire actions")
     p.add_argument("--config", required=True)
     p.add_argument("--camera", action="append", help="only these cameras (repeatable); default all")
-    p.add_argument("--models-dir", default=".", help="where <model>.pt and the OpenVINO export live")
+    p.add_argument("--models-dir", default=MODELS_DIR, help=MODELS_DIR_HELP)
     p.add_argument("--loop", action="store_true", help="loop file sources instead of stopping at the end")
     p.add_argument("--max-seconds", type=float, default=0, help="stop after this many seconds")
     p.add_argument("--stop-after-actions", type=int, default=0, help="stop once this many actions have fired")
