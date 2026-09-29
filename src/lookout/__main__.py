@@ -109,6 +109,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     try:
         config = load_config(args.config)
+        webhook_url = config.actions.webhook_url() if config.actions.sink == "ha_webhook" else ""
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 1
@@ -130,7 +131,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         serve(config.metrics.port, config.metrics.host)
     sink: ActionSink
     if config.actions.sink == "ha_webhook":
-        sink = HAWebhookSink(config.actions.ha_webhook_url or "", timeout_s=config.actions.ha_timeout_s)
+        sink = HAWebhookSink(webhook_url, timeout_s=config.actions.ha_timeout_s)
     else:
         sink = MockSink()
     client = OpenAICompatibleClient(config.models)

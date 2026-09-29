@@ -171,6 +171,26 @@ def test_webhook_sink_requires_url():
         Config.from_dict(data)
 
 
+def test_webhook_url_from_env(monkeypatch):
+    """A deployment names the variable; the secret stays out of the file. A
+    missing variable is a startup error, not a silently dead sink."""
+    data = minimal()
+    data["actions"] = {"sink": "ha_webhook", "ha_webhook_url_env": "LOOKOUT_TEST_HOOK"}
+    config = Config.from_dict(data)  # loads without the variable: `check` works anywhere
+    monkeypatch.delenv("LOOKOUT_TEST_HOOK", raising=False)
+    with pytest.raises(ConfigError, match=r"\$LOOKOUT_TEST_HOOK"):
+        config.actions.webhook_url()
+    monkeypatch.setenv("LOOKOUT_TEST_HOOK", "http://ha:8123/api/webhook/abc")
+    assert config.actions.webhook_url() == "http://ha:8123/api/webhook/abc"
+
+
+def test_webhook_url_and_env_both_rejected():
+    data = minimal()
+    data["actions"] = {"sink": "ha_webhook", "ha_webhook_url": "http://x", "ha_webhook_url_env": "Y"}
+    with pytest.raises(ConfigError, match="not both"):
+        Config.from_dict(data)
+
+
 def test_unknown_fields_rejected():
     """Typos in keys must not be silently ignored."""
     data = minimal()

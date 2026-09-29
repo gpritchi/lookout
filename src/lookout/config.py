@@ -22,6 +22,7 @@ Two layers of validation:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -113,13 +114,32 @@ class ActionsSpec(BaseModel):
 
     sink: Literal["mock", "ha_webhook"] = "mock"
     ha_webhook_url: str | None = None  # https://<ha>/api/webhook/<id>
+    # Or the name of an environment variable holding that URL. The webhook id
+    # is the only thing guarding the automation, so a deployment keeps it out of
+    # the config file, like a model's api_key_env.
+    ha_webhook_url_env: str | None = None
     ha_timeout_s: float = Field(default=5.0, gt=0)
 
     @model_validator(mode="after")
     def _webhook_needs_url(self) -> "ActionsSpec":
-        if self.sink == "ha_webhook" and not self.ha_webhook_url:
-            raise ValueError("actions.sink is 'ha_webhook' but actions.ha_webhook_url is not set")
+        if self.sink == "ha_webhook" and not (self.ha_webhook_url or self.ha_webhook_url_env):
+            raise ValueError(
+                "actions.sink is 'ha_webhook' but neither actions.ha_webhook_url nor actions.ha_webhook_url_env is set"
+            )
+        if self.ha_webhook_url and self.ha_webhook_url_env:
+            raise ValueError("set actions.ha_webhook_url or actions.ha_webhook_url_env, not both")
         return self
+
+    def webhook_url(self) -> str:
+        """The URL to POST to, reading the environment if the config names a
+        variable. Checked when a run starts, not at load: `lookout check` must
+        work on a machine that doesn't hold the secret."""
+        if self.ha_webhook_url:
+            return self.ha_webhook_url
+        url = os.environ.get(self.ha_webhook_url_env or "", "")
+        if not url:
+            raise ConfigError(f"actions.ha_webhook_url_env names ${self.ha_webhook_url_env}, which is not set")
+        return url
 
 
 class MetricsSpec(BaseModel):
