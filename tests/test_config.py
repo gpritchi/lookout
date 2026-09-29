@@ -208,6 +208,29 @@ def test_trigger_accepts_one_label_or_several():
     assert multi.matches("truck") and not multi.matches("person")
 
 
+def with_unclear(unclear: str, outcomes: dict) -> dict:
+    data = minimal()
+    step = data["chains"][0]["steps"][0]
+    step["outcomes"] = outcomes
+    step["unclear"] = unclear
+    return data
+
+
+def test_unclear_names_an_outcome_of_its_step():
+    outcomes = {"VAN": {"end": True}, "WAIT": {"retry_in_s": 5}}
+    step = Config.from_dict(with_unclear("WAIT", outcomes)).chain("arrivals").steps[0]
+    assert step.unclear == "WAIT"
+    with pytest.raises(ConfigError, match="unclear.*'NOPE'.*not one of its outcomes"):
+        Config.from_dict(with_unclear("NOPE", outcomes))
+
+
+def test_unclear_may_not_fire_an_action():
+    """An answer the engine could not read must never be what fires an action."""
+    outcomes = {"VAN": {"action": {"type": "notify", "message": "van"}}, "WAIT": {"retry_in_s": 5}}
+    with pytest.raises(ConfigError, match="unclear.*'VAN'.*fires an action"):
+        Config.from_dict(with_unclear("VAN", outcomes))
+
+
 def test_original_dict_not_mutated():
     data = minimal()
     before = deepcopy(data)

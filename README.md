@@ -170,7 +170,13 @@ runtime surprise.
 - **outcomes** map the model's answer to exactly one of: `next` step, `end`,
   fire an `action`, or `retry_in_s` seconds later on a fresh window. Answers
   are matched exactly, then case-insensitively, then as a whole word inside
-  prose, since models like to explain themselves.
+  prose, since models like to explain themselves. An answer only counts if it
+  names exactly one outcome: "DELIVERED or TAKEN" and "not DELIVERED" are not
+  answers. When a reply runs over several lines, its last line decides.
+- **unclear** (optional) names the outcome to take when the answer can't be
+  read that way, typically the step's "keep watching" retry. Without it, an
+  unreadable answer resets the chain. It may not name an outcome that fires
+  an action; the config fails to load if it does.
 
 ### A chain with no steps
 

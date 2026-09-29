@@ -238,7 +238,11 @@ class StepSpec(BaseModel):
     triggering event, wait up to `timeout_s`, map the answer through `outcomes`.
     `priority` is the queue priority of the inference job (higher wins).
     `window` says how much stream the payload covers; a chain-level `window`
-    is the default for steps that leave it out."""
+    is the default for steps that leave it out.
+
+    `unclear` names the outcome to take when an answer cannot be read as
+    exactly one of the outcomes: no label in it, two labels, or a negated one.
+    Without it such an answer resets the chain. It may not fire an action."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -250,6 +254,7 @@ class StepSpec(BaseModel):
     prompt: str
     outcomes: dict[str, OutcomeSpec] = Field(min_length=1)
     window: WindowSpec | None = None
+    unclear: str | None = None
 
 
 class OnTriggerSpec(BaseModel):
@@ -376,6 +381,18 @@ class Config(BaseModel):
                         raise ConfigError(
                             f"chain '{chain.id}' step '{step.id}' outcome '{answer}' goes to "
                             f"'{outcome.next}', which is not a step in that chain {sorted(step_ids)}"
+                        )
+                if step.unclear is not None:
+                    unclear = step.outcomes.get(step.unclear)
+                    if unclear is None:
+                        raise ConfigError(
+                            f"chain '{chain.id}' step '{step.id}' sets unclear to '{step.unclear}', "
+                            f"which is not one of its outcomes {sorted(step.outcomes)}"
+                        )
+                    if unclear.action is not None:
+                        raise ConfigError(
+                            f"chain '{chain.id}' step '{step.id}' sets unclear to '{step.unclear}', "
+                            "which fires an action; an answer the engine could not read must not fire one"
                         )
 
     def chain(self, chain_id: str) -> ChainSpec:

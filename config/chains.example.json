@@ -72,7 +72,8 @@
             "DELIVERY_IN_PROGRESS": { "next": "confirm-delivery" },
             "PERSON_NO_PACKAGE": { "action": { "type": "notify", "message": "Unknown grey van in driveway" } },
             "NOBODY_YET": { "retry_in_s": 5 }
-          }
+          },
+          "unclear": "NOBODY_YET"
         },
         {
           "id": "confirm-delivery",
@@ -100,7 +101,8 @@
             "MAN_DRIVER_SIDE": { "next": "count-visitors" },
             "WOMAN": { "action": { "type": "notify", "message": "Sister-in-law is at the door" } },
             "NOBODY_YET": { "retry_in_s": 5 }
-          }
+          },
+          "unclear": "NOBODY_YET"
         },
         {
           "id": "count-visitors",
@@ -114,7 +116,8 @@
             "ONE_TO_HOUSE": { "action": { "type": "notify", "message": "Brother-in-law is at the door" } },
             "TWO_TO_HOUSE": { "action": { "type": "notify", "message": "Sister-in-law and her husband are at the door" } },
             "NOBODY_LEFT_TRUCK": { "retry_in_s": 10 }
-          }
+          },
+          "unclear": "NOBODY_LEFT_TRUCK"
         }
       ]
     },
