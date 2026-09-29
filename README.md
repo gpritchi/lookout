@@ -76,7 +76,8 @@ docker run --rm lookout
 
 The image carries the detector already exported to OpenVINO, so the live
 commands below run in it with no network access to fetch weights and no
-writable models directory.
+writable models directory. It has no torch in it: lookout runs the export on
+the OpenVINO runtime directly.
 
 ### 2. A real camera, or a fake one
 
@@ -92,6 +93,18 @@ Watch the detector alone, no models involved:
 uv run python -m lookout tier1 --config config/chains.example.json \
   --camera driveway --source rtsp://<host>:8554/driveway --max-seconds 120
 ```
+
+Outside the image, the first run needs the OpenVINO export, and making it
+needs Ultralytics and torch, which are an optional extra (so is
+`"backend": "torch"` in the config). Once:
+
+```
+uv sync --extra torch
+```
+
+The first detector run then exports `yolov8n_openvino_model/` into
+`--models-dir` (default: the working directory), and from then on only the
+export is used. Point `--models-dir` at an existing export to skip all this.
 
 ### 3. The whole thing
 
@@ -191,8 +204,12 @@ intent filter. The tier boundary is empirical and movable in both directions.
 
 ## How it works
 
-- **`tier1.py`** — YOLOv8n via OpenVINO (baked into the image at build time;
-  exported on first run outside it; PyTorch as the fallback backend) over an OpenCV capture. Detections become events through
+- **`tier1.py`** — YOLOv8n exported to OpenVINO (baked into the image at build
+  time; exported on first run outside it) over an OpenCV capture. The export
+  runs on the OpenVINO runtime with lookout's own letterbox and NMS, the same
+  arithmetic as Ultralytics' predictor, so neither Ultralytics nor torch is
+  needed at runtime; PyTorch through Ultralytics stays as the optional `torch`
+  backend. Detections become events through
   count-rise hysteresis per label: fire when a label's count rises above its
   baseline and stays there, let the baseline follow the count back down. A
   parked car is scenery, not an arrival. Objects are counted down to a low
