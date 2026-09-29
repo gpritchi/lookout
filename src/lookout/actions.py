@@ -61,13 +61,35 @@ class MockSink:
         log.info("%s", describe(action, context))
 
 
+def redact_webhook(url: str) -> str:
+    """The webhook id (the last path segment) is the secret; keep the rest so a
+    log line still says where the POST went."""
+    head, _, _ = url.rpartition("/")
+    return f"{head}/<redacted>"
+
+
+class _RedactURL(logging.Filter):
+    """httpx logs every request's full URL at INFO. Swap this sink's URL for its
+    redacted form in those records; other requests (model calls) are untouched."""
+
+    def __init__(self, url: str) -> None:
+        super().__init__()
+        self.url, self.safe = url, redact_webhook(url)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(self.safe if str(a) == self.url else a for a in record.args)
+        return True
+
+
 class HAWebhookSink:
     """One POST per action. The body is the action's own fields plus the
     context, flat, so an HA automation can template `trigger.json.message`
     or branch on `trigger.json.type` without unpacking anything.
 
     A failed POST is logged and counted, never raised: the chain has already
-    concluded, and a dead HA must not take the engine down with it."""
+    concluded, and a dead HA must not take the engine down with it. The URL
+    never reaches a log in full: its last segment is the webhook id."""
 
     def __init__(self, url: str, timeout_s: float = 5.0, transport: httpx.BaseTransport | None = None) -> None:
         self.url = url
@@ -75,9 +97,12 @@ class HAWebhookSink:
         self.fired: list[tuple[ActionSpec, ActionContext]] = []
         self.failed = 0
         self._http = httpx.Client(transport=transport) if transport else httpx.Client()
+        self._redact = _RedactURL(url)
+        logging.getLogger("httpx").addFilter(self._redact)
 
     def close(self) -> None:
         self._http.close()
+        logging.getLogger("httpx").removeFilter(self._redact)
 
     def payload(self, action: ActionSpec, context: ActionContext) -> dict[str, Any]:
         body: dict[str, Any] = {"type": action.type, **action.model_dump(exclude={"type"})}
@@ -91,8 +116,8 @@ class HAWebhookSink:
             response = self._http.post(self.url, json=self.payload(action, context), timeout=self.timeout_s)
         except httpx.HTTPError as exc:
             self.failed += 1
-            log.error("webhook %s failed: %s", self.url, exc)
+            log.error("webhook %s failed: %s", self._redact.safe, exc)
             return
         if response.status_code >= 300:
             self.failed += 1
-            log.error("webhook %s returned HTTP %s: %s", self.url, response.status_code, response.text[:200])
+            log.error("webhook %s returned HTTP %s: %s", self._redact.safe, response.status_code, response.text[:200])
