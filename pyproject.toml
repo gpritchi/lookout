@@ -5,7 +5,9 @@ description = "Tiered camera-event escalation: cheap local detection, priority-s
 requires-python = ">=3.11"
 dependencies = [
     "openvino>=2025.1",
-    "opencv-python>=4.10",
+    # Headless: no window is ever opened, and the GUI build links libGL, which
+    # drags ~200 MB of Mesa into the image. See override-dependencies below.
+    "opencv-python-headless>=4.10",
     "numpy>=1.26",
     "pyyaml>=6.0",
     "pydantic>=2.9",
@@ -26,6 +28,14 @@ torch = [
     "torch>=2.4",
     "torchvision>=0.19",
 ]
+
+[tool.uv]
+# Ultralytics (the torch extra) requires the GUI opencv-python. Installed next
+# to the headless build, both write the same cv2 package and whichever lands
+# last wins. This override drops Ultralytics' requirement so the headless cv2
+# serves it too (it only reads and writes images). pip does not read this, so
+# a pip install with the extra gets both.
+override-dependencies = ["opencv-python; sys_platform == 'never'"]
 
 [dependency-groups]
 dev = [

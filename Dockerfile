@@ -7,8 +7,8 @@
 # OpenVINO model with the openvino runtime directly. They are the `torch` extra
 # in pyproject.toml, installed only in the export stage and pinned there to
 # the CPU wheel index (the default resolution pulls the CUDA build and several
-# GB of NVIDIA libraries). With them in the runtime venv the image was 1.99 GB
-# on disk; without, 813 MB.
+# GB of NVIDIA libraries). With them in the runtime venv, plus the GUI OpenCV
+# build and the libGL it needs, the image was 1.99 GB on disk; without, 559 MB.
 
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
@@ -32,10 +32,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS detector
 ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
 WORKDIR /export
-# cv2 links libGL and glib, and ultralytics imports cv2 even to export.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
- && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev --extra torch
@@ -44,11 +40,8 @@ ADD --checksum=sha256:f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccf
 RUN YOLO_CONFIG_DIR=/tmp /export/.venv/bin/python -c \
     "from ultralytics import YOLO; YOLO('/models/yolov8n.pt').export(format='openvino', imgsz=640, half=False)"
 
+# No apt packages: the headless OpenCV wheel does not link libGL.
 FROM python:3.13-slim-bookworm
-# OpenCV's wheel links against libGL and glib even when no window is ever opened.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
- && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
