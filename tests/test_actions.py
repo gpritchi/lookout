@@ -2,6 +2,7 @@
 on a spare port."""
 
 import json
+import logging
 import socket
 
 import httpx
@@ -50,6 +51,23 @@ def test_webhook_failure_is_counted_not_raised():
     sink = HAWebhookSink("https://ha.test/api/webhook/x", transport=httpx.MockTransport(boom))
     sink.fire(ActionSpec(type="notify", message="m"), CTX)
     assert sink.failed == 1
+
+
+def test_webhook_id_never_reaches_a_log(caplog):
+    """The id is the automation's only guard. httpx logs each request's URL at
+    INFO and the sink logs failures; neither may carry the id."""
+    secret = "https://ha.test/api/webhook/0123456789abcdef"
+    caplog.set_level(logging.INFO)
+    ok = HAWebhookSink(secret, transport=Hook().transport())
+    ok.fire(ActionSpec(type="notify", message="m"), CTX)
+    bad = HAWebhookSink(secret, transport=Hook(status=500).transport())
+    bad.fire(ActionSpec(type="notify", message="m"), CTX)
+    ok.close()
+    bad.close()
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "0123456789abcdef" not in text
+    assert "https://ha.test/api/webhook/<redacted>" in text  # still says where it went
+    assert any(r.name == "httpx" for r in caplog.records)  # the request line was logged, redacted
 
 
 def test_action_field_named_like_context_is_kept_and_context_prefixed():
