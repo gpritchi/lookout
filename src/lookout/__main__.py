@@ -79,7 +79,7 @@ def cmd_tier1(args: argparse.Namespace) -> int:
     from prometheus_client import REGISTRY
 
     from lookout.events import DetectionEvent
-    from lookout.tier1 import VideoSource, YoloDetector
+    from lookout.tier1 import DetectorError, VideoSource, load_detector
 
     try:
         config = load_config(args.config)
@@ -88,7 +88,11 @@ def cmd_tier1(args: argparse.Namespace) -> int:
         return 1
     camera = config.cameras[args.camera]
     uri = args.source or camera.source
-    detector = YoloDetector(config.tier1, models_dir=args.models_dir)
+    try:
+        detector = load_detector(config.tier1, models_dir=args.models_dir)
+    except DetectorError as exc:
+        print(f"detector error: {exc}", file=sys.stderr)
+        return 1
     source = VideoSource(args.camera, uri, detector, config.tier1, loop=False)
     t0 = time.perf_counter()
     events = 0
@@ -117,7 +121,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     --stop-after-actions."""
     from lookout.actions import ActionSink, HAWebhookSink, MockSink
     from lookout.runtime import run_live
-    from lookout.tier1 import VideoSource, YoloDetector
+    from lookout.tier1 import DetectorError, VideoSource, load_detector
     from lookout.vlm import OpenAICompatibleClient
 
     try:
@@ -126,7 +130,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 1
-    detector = YoloDetector(config.tier1, models_dir=args.models_dir)
+    try:
+        detector = load_detector(config.tier1, models_dir=args.models_dir)
+    except DetectorError as exc:
+        print(f"detector error: {exc}", file=sys.stderr)
+        return 1
     sources = {}
     for name, camera in config.cameras.items():
         if args.camera and name not in args.camera:

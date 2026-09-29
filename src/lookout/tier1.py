@@ -1,9 +1,13 @@
 """Tier-1: the cheap detector over a video stream.
 
-YoloDetector wraps an Ultralytics model (OpenVINO export by default, PyTorch
-weights as the fallback) and returns COCO-class detections for one frame. Every
-call is timed under {model, tier="tier1"} so the write-up's "milliseconds vs
-seconds" claim has numbers.
+OpenVinoDetector runs the YOLOv8 OpenVINO export with the openvino runtime
+directly and returns COCO-class detections for one frame. It does its own pre-
+and postprocessing (letterbox, NMS, box scaling), the same arithmetic as
+Ultralytics' predictor, so neither Ultralytics nor torch is imported at runtime:
+they are an install extra, needed only to export the model (once, on a laptop;
+at build time, in the image) and for `backend: "torch"`, which runs the .pt
+weights through Ultralytics. Every call is timed under {model, tier="tier1"} so
+the write-up's "milliseconds vs seconds" claim has numbers.
 
 ArrivalDebouncer turns per-frame detections into events. The naive rule, "label
 present for N frames", is wrong for a driveway: a parked car is present in every
@@ -24,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -31,6 +36,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import yaml
 
 from lookout.config import Tier1Spec
 from lookout.events import DetectionEvent, Frame
@@ -51,25 +57,185 @@ class Detection:
 Detector = Callable[[np.ndarray], list[Detection]]
 
 
-class YoloDetector:
-    """Ultralytics YOLO with the OpenVINO export, exporting on first use if the
-    directory is missing. `backend="torch"` uses the .pt weights directly."""
+class DetectorError(RuntimeError):
+    """The detector cannot be loaded; the message says what to do about it."""
 
-    def __init__(self, spec: Tier1Spec, models_dir: str | Path = ".") -> None:
-        from ultralytics import YOLO  # slow import; keep it out of module load
 
+# Ultralytics' predict defaults, which every tuning run in this repo used.
+NMS_IOU = 0.7
+MAX_DET = 300
+# Class-aware NMS in one pass: shift each class's boxes this far apart so boxes
+# of different classes never overlap (Ultralytics' max_wh).
+_CLASS_OFFSET = 7680.0
+_PAD_VALUE = 114
+
+
+def letterbox(frame_bgr: np.ndarray, shape: tuple[int, int]) -> tuple[np.ndarray, float, tuple[int, int]]:
+    """Scale `frame_bgr` to fit `shape` (h, w) keeping its aspect ratio and pad
+    the rest with grey, image centred. Returns the padded image, the scale
+    gain, and the (left, top) padding. Rounding follows Ultralytics' LetterBox
+    exactly (`round(d - 0.1)` puts the odd pixel on the bottom/right), because
+    a one-pixel shift of the input shifts every box."""
+    h0, w0 = frame_bgr.shape[:2]
+    h, w = shape
+    gain = min(h / h0, w / w0)
+    new_w, new_h = round(w0 * gain), round(h0 * gain)
+    dw, dh = (w - new_w) / 2, (h - new_h) / 2
+    top, bottom = round(dh - 0.1), round(dh + 0.1)
+    left, right = round(dw - 0.1), round(dw + 0.1)
+    if (new_w, new_h) != (w0, h0):
+        frame_bgr = cv2.resize(frame_bgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    padded = cv2.copyMakeBorder(
+        frame_bgr, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(_PAD_VALUE,) * 3
+    )
+    return padded, gain, (left, top)
+
+
+def to_input(image_bgr: np.ndarray) -> np.ndarray:
+    """HWC BGR uint8 -> 1x3xHxW RGB float32 in [0, 1]. Divides rather than
+    multiplying by 1/255 so the floats match Ultralytics' bit for bit."""
+    rgb = image_bgr[..., ::-1].transpose(2, 0, 1)[None]
+    return np.ascontiguousarray(rgb, dtype=np.float32) / np.float32(255)
+
+
+def nms(boxes: np.ndarray, scores: np.ndarray, iou_thres: float) -> np.ndarray:
+    """Greedy NMS: indices of the kept boxes, highest score first. A box is
+    dropped when its IoU with a kept box exceeds `iou_thres` (torchvision's rule,
+    which Ultralytics uses)."""
+    order = np.argsort(-scores, kind="stable")
+    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+    keep: list[int] = []
+    while order.size:
+        i, rest = order[0], order[1:]
+        keep.append(int(i))
+        w = np.clip(np.minimum(x2[i], x2[rest]) - np.maximum(x1[i], x1[rest]), 0, None)
+        h = np.clip(np.minimum(y2[i], y2[rest]) - np.maximum(y1[i], y1[rest]), 0, None)
+        inter = w * h
+        union = areas[i] + areas[rest] - inter
+        overlap = np.divide(inter, union, out=np.zeros_like(inter), where=union > 0)
+        order = rest[overlap <= iou_thres]
+    return np.array(keep, dtype=np.intp)
+
+
+def decode(
+    pred: np.ndarray, conf_thres: float, iou_thres: float = NMS_IOU, max_det: int = MAX_DET
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """YOLOv8 head output [4 + classes, anchors] (cx, cy, w, h, then one score
+    per class) -> (xyxy boxes, scores, class ids) in model-input pixels, after
+    the confidence threshold and class-aware NMS. Each anchor keeps only its
+    best class, and must beat `conf_thres` strictly, as in Ultralytics."""
+    rows = pred.T
+    class_scores = rows[:, 4:]
+    cls = class_scores.argmax(1)
+    conf = class_scores[np.arange(len(rows)), cls]
+    hit = conf > conf_thres
+    xywh, conf, cls = rows[hit, :4], conf[hit], cls[hit]
+    half = xywh[:, 2:] / 2
+    boxes = np.concatenate([xywh[:, :2] - half, xywh[:, :2] + half], axis=1)
+    offset = (cls.astype(np.float32) * np.float32(_CLASS_OFFSET))[:, None]
+    keep = nms(boxes + offset, conf, iou_thres)[:max_det]
+    return boxes[keep], conf[keep], cls[keep]
+
+
+def unletterbox(boxes: np.ndarray, gain: float, pad: tuple[int, int], frame_shape: tuple[int, ...]) -> np.ndarray:
+    """Map xyxy boxes from the letterboxed input back to the original frame,
+    clipped to it."""
+    h, w = frame_shape[:2]
+    out = boxes.copy()
+    out[:, [0, 2]] -= pad[0]
+    out[:, [1, 3]] -= pad[1]
+    out /= gain
+    out[:, [0, 2]] = out[:, [0, 2]].clip(0, w)
+    out[:, [1, 3]] = out[:, [1, 3]].clip(0, h)
+    return out
+
+
+def _detections(
+    boxes: np.ndarray, confs: np.ndarray, classes: np.ndarray, names: dict[int, str],
+    frame_shape: tuple[int, ...], min_box_frac: float,
+) -> list[Detection]:
+    """Frame-pixel xyxy boxes -> Detections, integer boxes (truncated), dropping
+    boxes smaller than `min_box_frac` of the frame."""
+    h, w = frame_shape[:2]
+    min_area = min_box_frac * w * h
+    out: list[Detection] = []
+    for cls, conf, xyxy in zip(classes, confs, boxes):
+        x1, y1, x2, y2 = (int(v) for v in xyxy.tolist())
+        if (x2 - x1) * (y2 - y1) < min_area:
+            continue
+        out.append(Detection(names[int(cls)], float(conf), (x1, y1, x2, y2)))
+    return out
+
+
+class OpenVinoDetector:
+    """The exported YOLOv8 model on the openvino runtime. `exported` is the
+    `<model>_openvino_model` directory Ultralytics writes: the IR (.xml/.bin)
+    and a metadata.yaml with the class names."""
+
+    def __init__(self, spec: Tier1Spec, exported: str | Path) -> None:
+        import openvino as ov
+
+        exported = Path(exported)
+        xml = min(exported.glob("*.xml"), default=None)
+        meta = exported / "metadata.yaml"
+        if xml is None or not meta.is_file():
+            raise DetectorError(f"{exported} is not a complete OpenVINO export (needs <model>.xml and metadata.yaml)")
+        with meta.open() as fh:
+            self.names: dict[int, str] = {int(k): v for k, v in yaml.safe_load(fh)["names"].items()}
         self.spec = spec
-        models_dir = Path(models_dir)
-        weights = models_dir / f"{spec.model}.pt"
-        if spec.backend == "openvino":
-            exported = models_dir / f"{spec.model}_openvino_model"
-            if not exported.exists():
-                log.info("exporting %s to OpenVINO at %s (one-time)", spec.model, exported)
-                YOLO(str(weights)).export(format="openvino", imgsz=spec.imgsz, half=False)
-            self._model = YOLO(str(exported), task="detect")
-        else:
-            self._model = YOLO(str(weights))
         self.name = f"{spec.model}-{spec.backend}"
+        core = ov.Core()
+        model = core.read_model(xml)
+        shape = model.input(0).get_partial_shape()
+        if shape.is_static:
+            self.input_hw = (shape[2].get_length(), shape[3].get_length())
+            if self.input_hw != (spec.imgsz, spec.imgsz):
+                raise DetectorError(
+                    f"{exported} was exported at {self.input_hw[0]}x{self.input_hw[1]} but tier1.imgsz is "
+                    f"{spec.imgsz}; delete the export to re-export it at the configured size"
+                )
+        else:
+            self.input_hw = (spec.imgsz, spec.imgsz)
+        # Ultralytics' choice: CPU when that is all there is, else let AUTO pick.
+        device = spec.device.upper() if spec.device else ("CPU" if core.available_devices == ["CPU"] else "AUTO")
+        self._model = core.compile_model(model, device, {"PERFORMANCE_HINT": "LATENCY"})
+        self._output = self._model.output(0)
+        # One compiled model serves every camera thread; its implicit infer
+        # request is not safe to share, so calls take turns (Ultralytics'
+        # predictor serialised them the same way).
+        self._lock = threading.Lock()
+
+    def __call__(self, frame_bgr: np.ndarray) -> list[Detection]:
+        with timed(self.name, "tier1"):
+            image, gain, pad = letterbox(frame_bgr, self.input_hw)
+            with self._lock:
+                pred = self._model(to_input(image))[self._output][0]
+            boxes, confs, classes = decode(pred, self.spec.count_confidence)
+            boxes = unletterbox(boxes, gain, pad, frame_bgr.shape)
+        return _detections(boxes, confs, classes, self.names, frame_bgr.shape, self.spec.min_box_frac)
+
+
+def _import_yolo(why: str):  # -> ultralytics.YOLO, which may not be installed
+    try:
+        from ultralytics import YOLO  # slow import; only the export and torch paths need it
+    except ImportError as exc:
+        raise DetectorError(
+            f"{why} needs Ultralytics and torch, which are an optional extra and not installed: "
+            "`uv sync --extra torch` (or `pip install 'lookout[torch]'`)"
+        ) from exc
+    return YOLO
+
+
+class UltralyticsDetector:
+    """`backend: "torch"`: the .pt weights through Ultralytics. Needs the
+    `torch` extra."""
+
+    def __init__(self, spec: Tier1Spec, weights: str | Path) -> None:
+        yolo = _import_yolo('tier1.backend "torch"')
+        self.spec = spec
+        self.name = f"{spec.model}-{spec.backend}"
+        self._model = yolo(str(weights))
         # Predict down to count_confidence; the debouncer applies min_confidence
         # to the newcomer only. See Tier1Spec.
         self._predict_kwargs = {"imgsz": spec.imgsz, "conf": spec.count_confidence, "verbose": False}
@@ -79,15 +245,26 @@ class YoloDetector:
     def __call__(self, frame_bgr: np.ndarray) -> list[Detection]:
         with timed(self.name, "tier1"):
             result = self._model.predict(frame_bgr, **self._predict_kwargs)[0]
-        h, w = frame_bgr.shape[:2]
-        min_area = self.spec.min_box_frac * w * h
-        out: list[Detection] = []
-        for cls, conf, xyxy in zip(result.boxes.cls, result.boxes.conf, result.boxes.xyxy):
-            x1, y1, x2, y2 = (int(v) for v in xyxy.tolist())
-            if (x2 - x1) * (y2 - y1) < min_area:
-                continue
-            out.append(Detection(result.names[int(cls)], float(conf), (x1, y1, x2, y2)))
-        return out
+        boxes, confs, classes = (t.cpu().numpy() for t in (result.boxes.xyxy, result.boxes.conf, result.boxes.cls))
+        return _detections(boxes, confs, classes, result.names, frame_bgr.shape, self.spec.min_box_frac)
+
+
+def load_detector(spec: Tier1Spec, models_dir: str | Path = ".") -> OpenVinoDetector | UltralyticsDetector:
+    """The configured detector. For OpenVINO, exports `<model>.pt` on first use
+    if the export is missing, which needs the `torch` extra; the image ships
+    the export, so it never does this."""
+    models_dir = Path(models_dir)
+    weights = models_dir / f"{spec.model}.pt"
+    if spec.backend == "torch":
+        return UltralyticsDetector(spec, weights)
+    exported = models_dir / f"{spec.model}_openvino_model"
+    if not exported.exists():
+        yolo = _import_yolo(
+            f"there is no OpenVINO export at {exported} (point --models-dir at one), and exporting {weights}"
+        )
+        log.info("exporting %s to OpenVINO at %s (one-time)", spec.model, exported)
+        yolo(str(weights)).export(format="openvino", imgsz=spec.imgsz, half=False)
+    return OpenVinoDetector(spec, exported)
 
 
 def iou(a: BBox, b: BBox) -> float:
