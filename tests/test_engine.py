@@ -201,7 +201,7 @@ def test_unrecognised_answer_resets_chain():
     rig.event("driveway", "car", 3.0)
     rig.engine.on_result(rig.pop(), "I am not sure what that is")
     assert rig.engine.active == [] and rig.sink.fired == []
-    assert any("unrecognised answer" in line for line in rig.trace)
+    assert any("no outcome named" in line and "resetting chain" in line for line in rig.trace)
 
 
 def test_inference_error_resets_chain():
@@ -222,8 +222,57 @@ def test_inference_error_resets_chain():
         ("Answer: OTHER", "OTHER"),
         ("VANGUARD", None),  # not a whole word
         ("nothing useful", None),
+        ("**VAN**", "VAN"),
+        ("VAN.", "VAN"),
+        ("VAN, definitely a VAN", "VAN"),  # one label, said twice
+        # Two labels named: the old matcher took whichever came first in the
+        # config's outcome order, which let key order decide what fired.
+        ("VAN or OTHER", None),
+        ("OTHER, maybe a VAN", None),
+        # A negated label is not an answer.
+        ("not a VAN", None),
+        ("This isn't a VAN", None),
+        ("It is not VAN", None),
+        # ...but a negation in an earlier clause does not reach the label.
+        ("No sliding door visible: VAN", "VAN"),
+        # Describe-then-label replies: the last line is the committed answer,
+        # whatever the prose above it mentions.
+        ("Grey, boxy, sliding door; not OTHER.\nVAN", "VAN"),
+        ("A sedan, not a van.\nAnswer: OTHER", "OTHER"),
     ],
 )
 def test_match_outcome(answer, expected):
     outcomes = Config.from_dict(CONFIG).chain("arrivals").steps[0].outcomes
     assert match_outcome(answer.strip(), outcomes) == expected
+
+
+def unclear_rig(unclear: str | None) -> Rig:
+    rig = Rig()
+    rig.config.chain("arrivals").step("driver").unclear = unclear
+    rig.frames("driveway", 3.0)
+    rig.event("driveway", "car", 3.0)
+    rig.engine.on_result(rig.pop(), "VAN")
+    rig.frames("driveway", 11.0)
+    return rig
+
+
+def test_ambiguous_answer_takes_the_unclear_outcome():
+    rig = unclear_rig("NOBODY_YET")
+    rig.engine.on_result(rig.pop(), "DELIVERY, or NOBODY_YET")
+    assert rig.sink.fired == []  # the action outcome was named, and still did not fire
+    assert rig.engine.active == ["arrivals"] and rig.engine.next_wakeup() == 16.0  # retry armed
+    assert any("names DELIVERY, NOBODY_YET" in line and "unclear -> NOBODY_YET" in line for line in rig.trace)
+
+
+def test_unrecognised_answer_takes_the_unclear_outcome_too():
+    rig = unclear_rig("NOBODY_YET")
+    rig.engine.on_result(rig.pop(), "hard to tell from here")
+    assert rig.engine.active == ["arrivals"] and rig.engine.next_wakeup() == 16.0
+    assert any("no outcome named" in line and "unclear -> NOBODY_YET" in line for line in rig.trace)
+
+
+def test_ambiguous_answer_without_unclear_resets_chain():
+    rig = unclear_rig(None)
+    rig.engine.on_result(rig.pop(), "not DELIVERY")
+    assert rig.engine.active == [] and rig.sink.fired == []
+    assert any("DELIVERY negated" in line and "resetting chain" in line for line in rig.trace)

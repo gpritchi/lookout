@@ -133,12 +133,14 @@ class Engine:
                 return
             text = str(answer).strip()
             run.history.append((run.step.id, text))
-            key = match_outcome(text, run.step.outcomes)
+            key, why = read_answer(text, run.step.outcomes)
             if key is None:
-                self._trace(
-                    f"[{self.clock():7.2f}] {run.chain.id}/{run.step.id}: unrecognised answer {text!r} "
-                    f"(expected one of {sorted(run.step.outcomes)}), resetting chain"
-                )
+                where = f"[{self.clock():7.2f}] {run.chain.id}/{run.step.id}: unclear answer {text!r} ({why}"
+                if run.step.unclear is not None:
+                    self._trace(f"{where}), unclear -> {run.step.unclear}")
+                    self._apply(run, run.step.unclear, run.step.outcomes[run.step.unclear])
+                    return
+                self._trace(f"{where}; expected one of {sorted(run.step.outcomes)}), resetting chain")
                 self._finish(run)
                 return
             outcome = run.step.outcomes[key]
@@ -284,16 +286,60 @@ class Engine:
 
 
 def match_outcome(answer: str, outcomes: dict[str, OutcomeSpec]) -> str | None:
-    """Map a model's text to an outcome key. Exact first, then case-insensitive,
-    then the first key appearing as a whole word (VLMs like to add prose around
-    the label they were told to emit). None if nothing matches."""
-    if answer in outcomes:
-        return answer
-    lowered = answer.lower()
+    """Map a model's text to an outcome key, or None if it names no outcome,
+    several, or a negated one. See read_answer."""
+    return read_answer(answer, outcomes)[0]
+
+
+# Words that, just before a label in the same clause, turn it into its opposite.
+_NEGATIONS = {"not", "no", "never", "without", "neither", "nor"}
+_CLAUSE_BREAK = re.compile(r"[.:;!?,()\n]")
+
+
+def read_answer(answer: str, outcomes: dict[str, OutcomeSpec]) -> tuple[str | None, str]:
+    """(outcome key, "") if the answer names exactly one outcome, else
+    (None, why). VLMs wrap the label they were told to emit in prose, so a
+    label is found as a whole word anywhere; but the answer only counts when it
+    is unambiguous. Two different labels ("DELIVERED or TAKEN") or a negated
+    one ("not DELIVERED") is not an answer: the old rule took whichever key came
+    first in the config's outcome order, which let key order decide what fired.
+
+    A reply over several lines (describe, then label) is decided by its last
+    line when that line names one outcome, whatever the prose above it says."""
+    text = answer.strip()
+    if text in outcomes:
+        return text, ""
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) > 1:
+        key, _ = _read_line(lines[-1], outcomes)
+        if key is not None:
+            return key, ""
+    return _read_line(text, outcomes)
+
+
+def _read_line(text: str, outcomes: dict[str, OutcomeSpec]) -> tuple[str | None, str]:
+    bare = text.strip().strip("*`\"' .!").lower()
     for key in outcomes:
-        if key.lower() == lowered:
-            return key
+        if key.lower() == bare:
+            return key, ""
+    found: dict[str, tuple[int, bool]] = {}  # key -> (first position, any occurrence negated)
     for key in outcomes:
-        if re.search(rf"(?<![A-Za-z0-9_]){re.escape(key)}(?![A-Za-z0-9_])", answer, re.IGNORECASE):
-            return key
-    return None
+        for m in re.finditer(rf"(?<![A-Za-z0-9_]){re.escape(key)}(?![A-Za-z0-9_])", text, re.IGNORECASE):
+            first, negated = found.get(key, (m.start(), False))
+            found[key] = (first, negated or _negated(text[: m.start()]))
+    if not found:
+        return None, "no outcome named"
+    if len(found) > 1:
+        return None, "names " + ", ".join(sorted(found, key=lambda k: found[k][0]))
+    ((key, (_, negated)),) = found.items()
+    if negated:
+        return None, f"{key} negated"
+    return key, ""
+
+
+def _negated(before: str) -> bool:
+    """Is there a negation among the two words just before this point, in the
+    same clause? "not a VAN", "isn't DELIVERED"; but not "No door visible: VAN"."""
+    clause = _CLAUSE_BREAK.split(before)[-1]
+    words = re.findall(r"[a-z']+", clause.lower())[-2:]
+    return any(word in _NEGATIONS or word.endswith("n't") for word in words)
