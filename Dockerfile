@@ -45,9 +45,10 @@ COPY config ./config
 COPY fixtures/sample ./fixtures/sample
 COPY --from=detector /models /app/models
 # LOOKOUT_MODELS_DIR is the default for --models-dir. YOLO_CONFIG_DIR puts
-# ultralytics' settings file in /tmp, the one writable path a locked-down pod has.
+# ultralytics' settings file under /tmp, the one writable path a locked-down pod
+# has; it must already exist, or ultralytics warns and falls back anyway.
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 \
-    LOOKOUT_MODELS_DIR=/app/models YOLO_CONFIG_DIR=/tmp/ultralytics
+    LOOKOUT_MODELS_DIR=/app/models YOLO_CONFIG_DIR=/tmp
 # /metrics, when config enables it.
 EXPOSE 9108
 ENTRYPOINT ["python", "-m", "lookout"]
