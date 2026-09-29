@@ -96,11 +96,12 @@
           "priority": 60,
           "timeout_s": 60,
           "window": { "before_s": 2, "after_s": 20, "frames": 8 },
-          "prompt": "These frames follow a black Tacoma parking. Watch who exits and from which door. Does a man exit from the driver's side, or a woman, or has nobody exited yet? Answer exactly one of: MAN_DRIVER_SIDE, WOMAN, NOBODY_YET.",
+          "prompt": "These frames, in time order, follow a black Tacoma pickup that has just parked facing the camera. Its driver's door is on the far side, hidden by the truck. The door on the near side, facing the camera, is the passenger door. A driver who gets out is first seen behind the truck bed or tailgate, walking around the truck.\nWho got out of the driver's door? Look only for people standing or walking OUTSIDE the truck.\nWrite one short sentence saying who is outside the truck, then end with exactly one of these labels:\nNOBODY_YET - nobody is outside the truck yet (use this when unsure)\nMAN_DRIVER_SIDE - a man got out on the driver's side\nWOMAN_DRIVER_SIDE - a woman got out on the driver's side\nPASSENGER_ONLY - the only person you can see got out of the near-side passenger door",
           "outcomes": {
+            "NOBODY_YET": { "retry_in_s": 5 },
+            "PASSENGER_ONLY": { "retry_in_s": 5 },
             "MAN_DRIVER_SIDE": { "next": "count-visitors" },
-            "WOMAN": { "action": { "type": "notify", "message": "Sister-in-law is at the door" } },
-            "NOBODY_YET": { "retry_in_s": 5 }
+            "WOMAN_DRIVER_SIDE": { "action": { "type": "notify", "message": "Sister-in-law is at the door" } }
           },
           "unclear": "NOBODY_YET"
         },
