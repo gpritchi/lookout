@@ -1,15 +1,19 @@
-# Two stages: build the venv with uv, then copy it onto a slim runtime image.
-# The same image runs the offline replay demo on a laptop and, later, the live
-# pipeline on a cluster node; only the command changes.
+# Three stages: build the runtime venv with uv, export the detector in a stage
+# of its own, then copy both onto a slim runtime image. The same image runs the
+# offline replay demo on a laptop and the live pipeline on a cluster node; only
+# the command changes.
 #
-# Torch is pinned to the CPU wheel index for Linux in pyproject.toml. Without
-# that, the default resolution pulls the CUDA build and several GB of NVIDIA
-# libraries that nothing here uses (tier-1 is OpenVINO/CPU; tier-2 is remote).
+# The runtime needs neither Ultralytics nor torch: tier1.py runs the exported
+# OpenVINO model with the openvino runtime directly. They are the `torch` extra
+# in pyproject.toml, installed only in the export stage and pinned there to
+# the CPU wheel index (the default resolution pulls the CUDA build and several
+# GB of NVIDIA libraries). With them in the runtime venv the image was 1.99 GB
+# on disk; without, 813 MB.
 
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
 WORKDIR /app
-# Dependencies first, so source edits do not invalidate the (large) dependency layer.
+# Dependencies first, so source edits do not invalidate the dependency layer.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
@@ -22,15 +26,22 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # a pod needs no internet and no writable models dir to start. The URL is a
 # fixed release asset and the checksum pins its bytes: the same weights every
 # tuning run in this repo used. imgsz matches Tier1Spec's default (640); a
-# config that changes it gets a mismatched export, as it would have before.
-FROM builder AS detector
-ADD --checksum=sha256:f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36 \
-    https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt /models/yolov8n.pt
+# config that changes it is refused at startup with a message saying so.
+# Its own venv, from the lockfile alone, so a source edit does not redo the
+# torch install and the export.
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS detector
+ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
+WORKDIR /export
 # cv2 links libGL and glib, and ultralytics imports cv2 even to export.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
  && rm -rf /var/lib/apt/lists/*
-RUN /app/.venv/bin/python -c \
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev --extra torch
+ADD --checksum=sha256:f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36 \
+    https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt /models/yolov8n.pt
+RUN YOLO_CONFIG_DIR=/tmp /export/.venv/bin/python -c \
     "from ultralytics import YOLO; YOLO('/models/yolov8n.pt').export(format='openvino', imgsz=640, half=False)"
 
 FROM python:3.13-slim-bookworm
@@ -43,12 +54,11 @@ COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
 COPY config ./config
 COPY fixtures/sample ./fixtures/sample
-COPY --from=detector /models /app/models
-# LOOKOUT_MODELS_DIR is the default for --models-dir. YOLO_CONFIG_DIR puts
-# ultralytics' settings file under /tmp, the one writable path a locked-down pod
-# has; it must already exist, or ultralytics warns and falls back anyway.
+# Only the export: the .pt weights stay in the export stage.
+COPY --from=detector /models/yolov8n_openvino_model /app/models/yolov8n_openvino_model
+# LOOKOUT_MODELS_DIR is the default for --models-dir.
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 \
-    LOOKOUT_MODELS_DIR=/app/models YOLO_CONFIG_DIR=/tmp
+    LOOKOUT_MODELS_DIR=/app/models
 # /metrics, when config enables it.
 EXPOSE 9108
 ENTRYPOINT ["python", "-m", "lookout"]

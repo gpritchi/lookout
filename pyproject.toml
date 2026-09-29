@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Tiered camera-event escalation: cheap local detection, priority-scheduled VLM escalation chains, Home Assistant actions"
 requires-python = ">=3.11"
 dependencies = [
-    "ultralytics>=8.3",
     "openvino>=2025.1",
     "opencv-python>=4.10",
     "numpy>=1.26",
@@ -12,6 +11,16 @@ dependencies = [
     "pydantic>=2.9",
     "prometheus-client>=0.21",
     "httpx>=0.27",
+]
+
+# Ultralytics and torch are NOT needed to run lookout: the detector runs the
+# exported OpenVINO model with the openvino runtime directly (tier1.py). They
+# are needed to export that model (the Dockerfile's detector stage, or the
+# first run on a laptop without an export) and for `tier1.backend: "torch"`.
+#   uv sync --extra torch
+[project.optional-dependencies]
+torch = [
+    "ultralytics>=8.3",
     # Direct only so [tool.uv.sources] below can pin them to the CPU wheel index;
     # uv applies sources to direct dependencies, not transitive ones.
     "torch>=2.4",
@@ -23,10 +32,10 @@ dev = [
     "pytest>=8.3",
 ]
 
-# Ultralytics depends on torch. On Linux the default index resolves the CUDA
-# build plus several GB of NVIDIA libraries that nothing here uses (tier-1 is
-# OpenVINO/CPU, tier-2 is a remote endpoint). Pin Linux to the CPU wheels so
-# the Docker image stays small; macOS keeps the default (MPS-capable) wheel.
+# Wherever torch is installed (the export stage, the torch extra), on Linux the
+# default index resolves the CUDA build plus several GB of NVIDIA libraries
+# that nothing here uses. Pin Linux to the CPU wheels; macOS keeps the default
+# (MPS-capable) wheel.
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
