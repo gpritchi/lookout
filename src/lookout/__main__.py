@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import signal
 import sys
 import time
 
@@ -20,6 +21,18 @@ from lookout.runtime import ScriptedModel, run_replay
 # unset and the working directory is used, as before.
 MODELS_DIR = os.environ.get("LOOKOUT_MODELS_DIR", ".")
 MODELS_DIR_HELP = "where <model>.pt and the OpenVINO export live (default: $LOOKOUT_MODELS_DIR or .)"
+
+
+def _raise_interrupt(signum: int, frame: object) -> None:
+    raise KeyboardInterrupt
+
+
+def stop_on_sigterm() -> None:
+    """Treat SIGTERM like Ctrl-C, which run_live already turns into a clean stop.
+    In a container lookout is PID 1, and the kernel ignores a signal PID 1 has
+    no handler for: without this, every pod stop waits out the grace period and
+    ends in SIGKILL."""
+    signal.signal(signal.SIGTERM, _raise_interrupt)
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -193,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
         format="%(message)s",
         stream=sys.stdout,
     )
+    stop_on_sigterm()
     return args.func(args)
 
 
