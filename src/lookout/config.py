@@ -101,12 +101,30 @@ class Tier1Spec(BaseModel):
     frame_fps: float = Field(default=2.0, gt=0)
     frame_max_width: int = Field(default=1280, ge=64)
     jpeg_quality: int = Field(default=85, ge=1, le=100)
+    # Labels counted as one: COCO flips a parked pickup between car and truck,
+    # and counted per label that flip reads as a truck arriving.
+    label_groups: list[list[str]] = Field(default_factory=lambda: [["car", "truck", "bus"]])
+    # Spot memory. A newcomer whose box sits where something of its group was
+    # seen for at least settle_s, within the last memory_s, is a parked vehicle
+    # back from a detection flicker, not an arrival. 94% of 399 triggers in the
+    # first soak on the real camera were exactly that. 0 turns it off.
+    memory_s: float = Field(default=600.0, ge=0)
+    settle_s: float = Field(default=20.0, gt=0)
 
     @model_validator(mode="after")
     def _count_not_above_fire(self) -> "Tier1Spec":
         if self.count_confidence > self.min_confidence:
             raise ValueError("tier1.count_confidence must not exceed tier1.min_confidence")
+        seen: set[str] = set()
+        for group in self.label_groups:
+            if dupes := seen & set(group):
+                raise ValueError(f"tier1.label_groups lists {sorted(dupes)} in more than one group")
+            seen |= set(group)
         return self
+
+    def group_map(self) -> dict[str, str]:
+        """label -> counting key; the key is the group's first label."""
+        return {label: group[0] for group in self.label_groups for label in group}
 
 
 class ActionsSpec(BaseModel):

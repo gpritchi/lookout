@@ -116,6 +116,111 @@ def test_newcomer_is_most_confident_non_overlapping_box():
     assert d.update([CAR_A, weak_new, strong_new]) == [strong_new]
 
 
+# -- spot memory and label groups: the soak's parked-vehicle re-triggers -------
+#
+# 2026-09-30 soak on the real camera: 399 triggers in 11 h, 94% of them from the
+# same few boxes. The top one (159 triggers) was a white pickup parked on the
+# street whose detection flickers and whose label flips car <-> truck.
+
+PICKUP = Detection("car", 0.8, (89, 149, 519, 382))
+PICKUP_AS_TRUCK = Detection("truck", 0.5, (89, 149, 519, 382))
+SEDAN = Detection("car", 0.8, (1667, 213, 1915, 363))
+VEHICLES = {"car": "vehicle", "truck": "vehicle", "bus": "vehicle"}
+
+
+def settled(n_frames=2, memory=400, settle=80, groups=None):
+    return ArrivalDebouncer(n_frames=n_frames, groups=groups or {}, memory_frames=memory, settle_frames=settle)
+
+
+def test_parked_car_flicker_refires_without_memory():
+    """The soak's failure, pinned: detection drops for n frames, the baseline
+    follows it down, and the same parked car comes back as a new arrival."""
+    d = ArrivalDebouncer(n_frames=2)
+    d.update([PICKUP])
+    for _ in range(100):
+        d.update([PICKUP])
+    d.update([])
+    d.update([])  # flickered out long enough to lower the baseline
+    d.update([PICKUP])
+    assert d.update([PICKUP]) == [PICKUP]
+
+
+def test_parked_car_flicker_is_absorbed_with_memory():
+    d = settled()
+    for _ in range(100):
+        d.update([SEDAN])  # parked at the curb from the start
+    for _ in range(3):
+        d.update([])
+    d.update([SEDAN])
+    assert d.update([SEDAN]) == []
+    assert all(d.update([SEDAN]) == [] for _ in range(10))
+
+
+def test_label_flip_on_one_vehicle_is_not_an_arrival_with_groups():
+    d = settled(groups=VEHICLES)
+    d.update([PICKUP])
+    for _ in range(100):
+        d.update([PICKUP])
+    for _ in range(3):
+        d.update([PICKUP_AS_TRUCK])  # same box, other label
+    assert all(d.update([PICKUP_AS_TRUCK]) == [] for _ in range(5))
+    assert all(d.update([PICKUP]) == [] for _ in range(5))
+
+
+def test_label_flip_without_groups_fires_as_a_truck_arrival():
+    d = ArrivalDebouncer(n_frames=2)
+    d.update([PICKUP])
+    d.update([PICKUP_AS_TRUCK])
+    assert d.update([PICKUP_AS_TRUCK]) == [PICKUP_AS_TRUCK]
+
+
+def test_first_frame_seeds_the_memory():
+    """After a restart, what's parked is known at once: its first flicker must
+    not fire just because it hasn't sat there for settle frames yet."""
+    d = settled()
+    d.update([PICKUP])  # first frame after a pod restart
+    d.update([])
+    d.update([])
+    d.update([PICKUP])
+    assert d.update([PICKUP]) == []
+
+
+def test_new_vehicle_at_a_new_spot_still_fires_with_memory():
+    d = settled(groups=VEHICLES)
+    d.update([PICKUP])
+    for _ in range(100):
+        d.update([PICKUP])
+    van = Detection("car", 0.88, (735, 75, 1229, 274))
+    d.update([PICKUP, van])
+    assert d.update([PICKUP, van]) == [van]
+
+
+def test_a_moving_vehicle_does_not_make_its_stopping_place_known():
+    """The Amazon van drives in, slows, stops: the spots it passed through are
+    brief, so where it stops is still new when the rise is judged."""
+    d = settled(n_frames=3, groups=VEHICLES)
+    d.update([PICKUP])
+    for _ in range(100):
+        d.update([PICKUP])
+    positions = [(1500, 90), (1350, 130), (1200, 160), (1080, 172), (1000, 174), (985, 175)]
+    fired = []
+    for cx, cy in positions:
+        fired += d.update([PICKUP, Detection("car", 0.88, (cx - 247, cy - 100, cx + 247, cy + 100))])
+    for _ in range(3):
+        fired += d.update([PICKUP, Detection("car", 0.88, (985 - 247, 75, 985 + 247, 275))])
+    assert len(fired) == 1 and fired[0].label == "car"
+
+
+def test_a_known_spot_is_forgotten_after_memory_frames():
+    d = settled(memory=50)
+    for _ in range(100):
+        d.update([SEDAN])
+    for _ in range(60):
+        d.update([])  # gone longer than the memory
+    d.update([SEDAN])
+    assert d.update([SEDAN]) == [SEDAN]
+
+
 def test_iou():
     assert iou((0, 0, 10, 10), (0, 0, 10, 10)) == 1.0
     assert iou((0, 0, 10, 10), (20, 20, 30, 30)) == 0.0
