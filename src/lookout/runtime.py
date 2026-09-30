@@ -19,6 +19,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from lookout.actions import ActionSink, MockSink
@@ -75,6 +76,41 @@ class ScriptedModel:
         if not answers:
             return self._default
         return answers.pop(0) if len(answers) > 1 else answers[0]
+
+
+class TraceFile:
+    """Append the trace to a file, one line per call, each stamped with UTC
+    wall-clock time: engine time restarts at 0 with every process, and a
+    deployment's trace outlives many of them. Opening fails loudly (a soak
+    with no file should not start quietly); a write that fails later is
+    logged once and counted, never raised, because a flaky mount must not
+    stop detection."""
+
+    def __init__(self, path: str | Path, started: str) -> None:
+        self._fh = Path(path).open("a", encoding="utf-8", buffering=1)
+        self._lock = threading.Lock()
+        self.failed = 0
+        self(f"--- started: {started}")
+
+    def __call__(self, line: str) -> None:
+        stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        with self._lock:
+            try:
+                self._fh.write(f"{stamp} {line}\n")
+            except (OSError, ValueError) as exc:  # ValueError: the handle is already closed
+                self.failed += 1
+                if self.failed == 1:
+                    log.error("trace file write failed, carrying on without it: %s", exc)
+
+    def close(self) -> None:
+        with self._lock:
+            self._fh.close()
+
+    def __enter__(self) -> "TraceFile":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
 
 @dataclass

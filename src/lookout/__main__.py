@@ -155,15 +155,34 @@ def cmd_run(args: argparse.Namespace) -> int:
         sink = HAWebhookSink(webhook_url, timeout_s=config.actions.ha_timeout_s)
     else:
         sink = MockSink()
+    trace_file = None
+    if args.trace_file:
+        from lookout.runtime import TraceFile
+
+        try:
+            trace_file = TraceFile(args.trace_file, started=f"lookout run --config {args.config}")
+        except OSError as exc:
+            print(f"trace file error: {exc}", file=sys.stderr)
+            return 1
+
+    def trace(line: str) -> None:
+        print(line, flush=True)
+        if trace_file is not None:
+            trace_file(line)
+
     client = OpenAICompatibleClient(config.models)
     try:
         report = run_live(
             config, sources, client, sink=sink,
             max_seconds=args.max_seconds, stop_after_actions=args.stop_after_actions,
-            trace=lambda line: print(line, flush=True),
+            trace=trace,
         )
     finally:
         client.close()
+        if trace_file is not None:
+            trace_file.close()
+            if trace_file.failed:
+                print(f"{trace_file.failed} trace file write(s) failed; see the log", file=sys.stderr)
         if isinstance(sink, HAWebhookSink):
             sink.close()
             if sink.failed:
@@ -206,6 +225,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--loop", action="store_true", help="loop file sources instead of stopping at the end")
     p.add_argument("--max-seconds", type=float, default=0, help="stop after this many seconds")
     p.add_argument("--stop-after-actions", type=int, default=0, help="stop once this many actions have fired")
+    p.add_argument(
+        "--trace-file",
+        help="also append the trace here, each line stamped with UTC time; kept across restarts (a soak's record)",
+    )
     p.set_defaults(func=cmd_run)
 
     args = parser.parse_args(argv)
