@@ -120,7 +120,11 @@ class Engine:
                     step=chain.steps[0], center_ts=event.ts, due_at=event.ts,
                 )
                 self._runs[chain.id] = run
-                self._trace(f"[{event.ts:7.2f}] {chain.id}: triggered by {event.label} ({event.confidence:.2f})")
+                x1, y1, x2, y2 = event.bbox
+                self._trace(
+                    f"[{event.ts:7.2f}] {chain.id}: triggered by {event.label} ({event.confidence:.2f}) "
+                    f"box {x1},{y1}-{x2},{y2}"
+                )
                 self._arm(run, chain.steps[0], center_ts=event.ts)
                 self._maybe_dispatch(run)
 

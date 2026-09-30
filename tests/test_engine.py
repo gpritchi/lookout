@@ -179,6 +179,15 @@ def test_run_older_than_max_age_is_abandoned_and_chain_rearms():
     assert rig.engine.active == ["arrivals"]  # a new trigger is accepted again
 
 
+def test_trigger_trace_carries_the_box():
+    """A soak on a real camera is read from this line: where the triggering
+    box sits and how big it is is what tunes min_box_frac or a zone mask."""
+    rig = Rig()
+    rig.frames("driveway", 3.0)
+    rig.event("driveway", "car", 3.0)
+    assert any("triggered by car (0.90) box 0,0-1,1" in line for line in rig.trace)
+
+
 def test_retrigger_while_active_is_ignored():
     rig = Rig()
     rig.frames("driveway", 3.0)
