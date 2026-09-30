@@ -285,8 +285,32 @@ class _LabelState:
 
 
 @dataclass
+class _Spot:
+    """A place something of this group has been seen. The anchor is the first
+    box and never moves, so a vehicle driving through leaves a trail of brief
+    spots behind it, while a parked one piles up hits on a single spot."""
+
+    anchor: BBox
+    hits: int
+    last_seen: int
+
+
+@dataclass
 class ArrivalDebouncer:
-    """Count-rise hysteresis per label. See the module docstring."""
+    """Count-rise hysteresis per label group, with a memory of settled spots.
+    See the module docstring.
+
+    `groups` maps labels onto one counting key (car, truck and bus as
+    "vehicle"): COCO flips a parked pickup between car and truck, and counted
+    per label that flip is a truck arriving. The event still carries the
+    detection's own label.
+
+    With `memory_frames` > 0, a would-be newcomer is absorbed instead of fired
+    when its box sits on a known spot: one where something of its group was
+    seen for at least `settle_frames` and last seen within `memory_frames`. That
+    is a parked vehicle flickering out of detection and back, which the count
+    alone reads as leaving and arriving. What was there on the first frame
+    counts as settled (after a restart, parked cars are known at once)."""
 
     n_frames: int
     fire_confidence: float = 0.0  # the newcomer must reach this to raise an event
@@ -295,37 +319,44 @@ class ArrivalDebouncer:
     # block later arrivals. Long, because a real arrival approaching from far
     # away spends a while below fire_confidence and must not be absorbed.
     absorb_after: int = 40
+    groups: dict[str, str] = field(default_factory=dict)
+    memory_frames: int = 0
+    settle_frames: int = 80
     _state: dict[str, _LabelState] = field(default_factory=dict)
+    _spots: dict[str, list[_Spot]] = field(default_factory=dict)
     _frames_seen: int = 0
 
     def update(self, detections: list[Detection]) -> list[Detection]:
         """Feed one analysed frame. Returns the detections to raise as events
-        (at most one per label per frame)."""
-        by_label: dict[str, list[Detection]] = {}
+        (at most one per label group per frame)."""
+        by_key: dict[str, list[Detection]] = {}
         for det in detections:
-            by_label.setdefault(det.label, []).append(det)
+            by_key.setdefault(self.groups.get(det.label, det.label), []).append(det)
         fired: list[Detection] = []
         first_frame = self._frames_seen == 0
+        frame = self._frames_seen
         self._frames_seen += 1
-        for label in sorted(set(by_label) | set(self._state)):
-            dets = by_label.get(label, [])
+        for key in sorted(set(by_key) | set(self._state)):
+            dets = by_key.get(key, [])
             count = len(dets)
-            state = self._state.get(label)
+            state = self._state.get(key)
             if state is None:
                 # On the very first frame, whatever is there is the baseline:
                 # nothing fires for what was already present when we started
                 # looking. A label first seen later was absent before, so its
                 # baseline is 0 and this frame starts its streak.
                 if first_frame:
-                    self._state[label] = _LabelState(baseline=count, baseline_boxes=[d.bbox for d in dets])
+                    self._state[key] = _LabelState(baseline=count, baseline_boxes=[d.bbox for d in dets])
                     continue
-                state = self._state[label] = _LabelState(baseline=0, baseline_boxes=[])
+                state = self._state[key] = _LabelState(baseline=0, baseline_boxes=[])
             if count > state.baseline:
                 state.above += 1
                 state.below = 0
                 if state.above >= self.n_frames:
                     newcomer = self._newcomer(dets, state.baseline_boxes)
-                    if newcomer.confidence >= self.fire_confidence:
+                    if self._on_known_spot(key, newcomer.bbox, frame):
+                        pass  # a parked vehicle back from a flicker: absorb, don't fire
+                    elif newcomer.confidence >= self.fire_confidence:
                         fired.append(newcomer)
                     elif state.above < self.absorb_after:
                         continue  # something new but not yet convincing: keep watching
@@ -337,7 +368,31 @@ class ArrivalDebouncer:
                     state.baseline, state.baseline_boxes, state.below = count, [d.bbox for d in dets], 0
             else:
                 state.above = state.below = 0
+        if self.memory_frames:
+            self._remember(by_key, frame, seed=first_frame)
         return fired
+
+    def _on_known_spot(self, key: str, box: BBox, frame: int) -> bool:
+        return any(
+            spot.hits >= self.settle_frames and frame - spot.last_seen <= self.memory_frames
+            and iou(spot.anchor, box) >= 0.5
+            for spot in self._spots.get(key, ())
+        )
+
+    def _remember(self, by_key: dict[str, list[Detection]], frame: int, seed: bool) -> None:
+        """After this frame's decisions: refresh the spots its boxes sit on,
+        open new ones, forget spots unseen for longer than the memory."""
+        for key, dets in by_key.items():
+            spots = self._spots.setdefault(key, [])
+            for det in dets:
+                spot = max(spots, key=lambda s: iou(s.anchor, det.bbox), default=None)
+                if spot is not None and iou(spot.anchor, det.bbox) >= 0.5:
+                    spot.hits += 1
+                    spot.last_seen = frame
+                else:
+                    spots.append(_Spot(det.bbox, self.settle_frames if seed else 1, frame))
+        for key, spots in self._spots.items():
+            self._spots[key] = [s for s in spots if frame - s.last_seen <= self.memory_frames]
 
     @staticmethod
     def _newcomer(dets: list[Detection], baseline_boxes: list[BBox]) -> Detection:
@@ -382,7 +437,11 @@ class VideoSource:
         self.spec = spec
         self.loop = loop
         self.clock = clock
-        self.debouncer = ArrivalDebouncer(spec.debounce_frames, fire_confidence=spec.min_confidence)
+        self.debouncer = ArrivalDebouncer(
+            spec.debounce_frames, fire_confidence=spec.min_confidence, groups=spec.group_map(),
+            memory_frames=round(spec.memory_s * spec.analysis_fps),
+            settle_frames=max(1, round(spec.settle_s * spec.analysis_fps)),
+        )
         self.frames_read = 0
         self.frames_analysed = 0
 

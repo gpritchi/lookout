@@ -236,3 +236,20 @@ def test_original_dict_not_mutated():
     before = deepcopy(data)
     Config.from_dict(data)
     assert data == before
+
+
+def test_tier1_label_groups_map_to_the_first_label_and_may_not_overlap():
+    tier1 = Config.from_dict(minimal()).tier1
+    assert tier1.group_map() == {"car": "car", "truck": "car", "bus": "car"}
+    assert tier1.memory_s == 600 and tier1.settle_s == 20
+    data = minimal()
+    data["tier1"] = {"label_groups": [["car", "truck"], ["truck", "bus"]]}
+    with pytest.raises(ConfigError, match="more than one group"):
+        Config.from_dict(data)
+
+
+def test_tier1_spot_memory_can_be_turned_off():
+    data = minimal()
+    data["tier1"] = {"memory_s": 0, "label_groups": []}
+    tier1 = Config.from_dict(data).tier1
+    assert tier1.memory_s == 0 and tier1.group_map() == {}

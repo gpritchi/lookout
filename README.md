@@ -216,10 +216,17 @@ intent filter. The tier boundary is empirical and movable in both directions.
   arithmetic as Ultralytics' predictor, so neither Ultralytics nor torch is
   needed at runtime; PyTorch through Ultralytics stays as the optional `torch`
   backend. Detections become events through
-  count-rise hysteresis per label: fire when a label's count rises above its
-  baseline and stays there, let the baseline follow the count back down. A
-  parked car is scenery, not an arrival. Objects are counted down to a low
-  confidence so they don't flicker, but only a confident newcomer fires.
+  count-rise hysteresis per label group (car, truck and bus count as one,
+  because COCO flips a parked pickup between car and truck): fire when the
+  count rises above its baseline and stays there, let the baseline follow the
+  count back down. A parked car is scenery, not an arrival. Objects are
+  counted down to a low confidence so they don't flicker, but only a
+  confident newcomer fires. And a newcomer that lands on a *known spot*, one
+  where something sat for `settle_s` within the last `memory_s`, is a parked
+  car coming back from a detection dropout and is absorbed, not fired. On
+  the first real-camera soak that was 94% of all triggers; the same 19
+  minutes of footage went from 42 events to 10, while the delivery van and
+  the Tacoma still fired on their clips.
 - **`frames.py`** — a per-camera ring buffer of JPEG frames, sized from the
   config, and the window sampler.
 - **`engine.py`** — the chain state machine. One active run per chain. Time
@@ -259,9 +266,13 @@ Three honest points.
 
 ## Limitations
 
-- No object tracking. A vehicle that repositions in frame re-triggers; the
-  VLM's "other, end" outcome absorbs the cost. Zone masks would be the proper
-  fix for edge-of-frame noise and are not built.
+- No object tracking. Passing traffic still fires: each car crossing the
+  street at a fresh spot is a count rise, and the VLM's "other, end" outcome
+  absorbs the cost (about 30 an hour on this camera in daylight). A zone mask
+  won't fix it here, because the delivery van stops on the same street; a
+  stationarity check (fire once the new box stays put) would, and is not built.
+- The spot memory can't tell a returning car from its twin: a different car
+  parking where another one sat within `memory_s` is absorbed.
 - A looping fake camera has a seam where the scene cuts; the debouncer sees
   an arrival there. Real cameras don't do that.
 - Capture-to-event lag is about two seconds at 1080p on a laptop CPU.
