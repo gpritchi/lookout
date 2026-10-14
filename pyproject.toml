@@ -13,6 +13,8 @@ dependencies = [
     "pydantic>=2.9",
     "prometheus-client>=0.21",
     "httpx>=0.27",
+    # Frigate's tracked-object events (tier1 "frigate").
+    "paho-mqtt>=2.1",
 ]
 
 # Ultralytics and torch are NOT needed to run lookout: the detector runs the
