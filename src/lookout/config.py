@@ -63,12 +63,80 @@ class ClipsSpec(BaseModel):
     path: str  # the MediaMTX path, e.g. "driveway"
 
 
+class FrigateCameraSpec(BaseModel):
+    """Which Frigate camera feeds this one, and what counts as an arrival.
+
+    Frigate tracks every object and reports it over MQTT many times. lookout
+    raises one event per tracked object, the first time it is all of: in one of
+    `zones`, stationary, and `min_travel` box-sizes away from where lookout first
+    saw it. Passing traffic never stops in the zone; a car parked when Frigate or
+    lookout (re)started never travels."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    camera: str  # the camera's name in Frigate's config
+    zones: list[str] = Field(min_length=1)
+    # Distance the box centre moved since first seen, in units of that first
+    # box's larger side. A parked car's box jitters by a few percent of itself.
+    min_travel: float = Field(default=1.0, ge=0)
+    # The image the step sees: Frigate's best snapshot of this object, cropped
+    # to it (only the vehicle that arrived, not the ones already parked), or
+    # the whole frame.
+    crop: bool = True
+    snapshot_height: int = Field(default=720, ge=64)
+
+
 class CameraSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source: str  # file path or RTSP URI; whatever OpenCV VideoCapture accepts
+    # File path or RTSP URI, whatever OpenCV VideoCapture accepts. Required for
+    # tier1 "yolo"; a "frigate" camera reads Frigate instead.
+    source: str | None = None
     tier1: str = "yolo"  # which tier-1 source type feeds this camera
+    frigate: FrigateCameraSpec | None = None  # required by tier1 "frigate"
     clips: ClipsSpec | None = None  # required by any chain step with a video_clip payload
+
+    @model_validator(mode="after")
+    def _source_for_tier1(self) -> "CameraSpec":
+        if self.tier1 == "frigate" and self.frigate is None:
+            raise ValueError("a camera with tier1 'frigate' needs a `frigate` block")
+        if self.tier1 != "frigate" and self.frigate is not None:
+            raise ValueError(f"a camera with tier1 '{self.tier1}' must not have a `frigate` block")
+        if self.tier1 == "yolo" and not self.source:
+            raise ValueError("a camera with tier1 'yolo' needs a `source`")
+        return self
+
+
+class MqttSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    host: str
+    port: int = Field(default=1883, ge=1, le=65535)
+    username: str | None = None
+    # Name of an environment variable holding the password; never the password.
+    password_env: str | None = None
+    topic_prefix: str = "frigate"  # Frigate's mqtt.topic_prefix
+
+    def password(self) -> str | None:
+        """Read at connect time, like actions.webhook_url(), so `lookout check`
+        works on a machine without the secret."""
+        if not self.password_env:
+            return None
+        value = os.environ.get(self.password_env, "")
+        if not value:
+            raise ConfigError(f"frigate.mqtt.password_env names ${self.password_env}, which is not set")
+        return value
+
+
+class FrigateSpec(BaseModel):
+    """A Frigate NVR as the tier-1 source: tracked objects over MQTT, snapshots
+    over its HTTP API. `url` is the unauthenticated API port (5000)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    mqtt: MqttSpec
+    timeout_s: float = Field(default=5.0, gt=0)
 
 
 class Tier1Spec(BaseModel):
@@ -347,6 +415,7 @@ class Config(BaseModel):
     models: dict[str, ModelSpec] = Field(min_length=1)
     cameras: dict[str, CameraSpec] = Field(min_length=1)
     tier1: Tier1Spec = Field(default_factory=Tier1Spec)
+    frigate: FrigateSpec | None = None  # required by any camera with tier1 "frigate"
     actions: ActionsSpec = Field(default_factory=ActionsSpec)
     metrics: MetricsSpec = Field(default_factory=MetricsSpec)
     chains: list[ChainSpec] = Field(min_length=1)
@@ -364,6 +433,9 @@ class Config(BaseModel):
 
     def check_references(self) -> None:
         """The cross-document rules. Each failure names enough to fix it."""
+        for name, camera in self.cameras.items():
+            if camera.tier1 == "frigate" and self.frigate is None:
+                raise ConfigError(f"camera '{name}' reads Frigate, but there is no top-level `frigate` block")
         seen_chain_ids: set[str] = set()
         for chain in self.chains:
             if chain.id in seen_chain_ids:
@@ -388,6 +460,14 @@ class Config(BaseModel):
                     raise ConfigError(
                         f"chain '{chain.id}' step '{step.id}' sends payload '{step.payload}' "
                         f"to model '{step.model}', which only accepts {model.capabilities}"
+                    )
+                if camera.tier1 == "frigate" and step.payload != "image":
+                    # The Frigate source yields one snapshot per arrival, not a
+                    # frame stream, so there is nothing to sample a window from.
+                    raise ConfigError(
+                        f"chain '{chain.id}' step '{step.id}' sends payload '{step.payload}', but camera "
+                        f"'{chain.camera}' reads Frigate, which supplies one snapshot per arrival: "
+                        "only 'image' steps work there"
                     )
                 if step.payload == "video_clip" and camera.clips is None:
                     raise ConfigError(

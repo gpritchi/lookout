@@ -12,10 +12,14 @@ import os
 import signal
 import sys
 import time
+from typing import TYPE_CHECKING
 
-from lookout.config import ConfigError, load_config
+from lookout.config import Config, ConfigError, load_config
 from lookout.events import ReplaySource
 from lookout.runtime import ScriptedModel, run_replay
+
+if TYPE_CHECKING:
+    from lookout.frigate import FrigateSource
 
 # The image bakes the detector into /app/models and sets this; on a laptop it's
 # unset and the working directory is used, as before.
@@ -45,7 +49,11 @@ def cmd_check(args: argparse.Namespace) -> int:
     for name, spec in config.models.items():
         print(f"  model   {name:<16} {spec.model} @ {spec.endpoint}  accepts {', '.join(spec.capabilities)}")
     for name, spec in config.cameras.items():
-        print(f"  camera  {name:<16} {spec.source}  buffer {config.buffer_seconds(name):.0f}s")
+        if spec.frigate is not None:
+            where = f"frigate:{spec.frigate.camera} zones {','.join(spec.frigate.zones)}"
+        else:
+            where = spec.source
+        print(f"  camera  {name:<16} {where}  buffer {config.buffer_seconds(name):.0f}s")
     for chain in config.chains:
         if chain.steps:
             steps = " -> ".join(f"{s.id}({s.payload},p{s.priority})" for s in chain.steps)
@@ -73,9 +81,24 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def frigate_source(config: Config, name: str) -> FrigateSource:
+    """A live Frigate source for camera `name`: MQTT events in, snapshots over
+    HTTP. One MQTT connection per camera, named after it."""
+    from lookout.frigate import FrigateSnapshots, FrigateSource, mqtt_messages
+
+    camera, frigate = config.cameras[name], config.frigate
+    assert camera.frigate is not None and frigate is not None  # guaranteed by config validation
+    frigate.mqtt.password()  # a missing secret fails here, at startup, not in the source's thread
+    return FrigateSource(
+        name, camera.frigate, FrigateSnapshots(frigate),
+        mqtt_messages(frigate, client_id=f"lookout-{name}-{os.getpid()}"),
+    )
+
+
 def cmd_tier1(args: argparse.Namespace) -> int:
-    """Run only the detector over one camera's source and print the events it
-    would raise, with detector latency. The verification tool for tier-1."""
+    """Run only the tier-1 source over one camera and print the events it
+    would raise (with detector latency for YOLO). The verification tool for
+    tier-1."""
     from prometheus_client import REGISTRY
 
     from lookout.events import DetectionEvent
@@ -87,7 +110,10 @@ def cmd_tier1(args: argparse.Namespace) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 1
     camera = config.cameras[args.camera]
+    if camera.tier1 == "frigate":
+        return _tier1_frigate(config, args)
     uri = args.source or camera.source
+    assert uri is not None  # guaranteed by config validation for a yolo camera
     try:
         detector = load_detector(config.tier1, models_dir=args.models_dir)
     except DetectorError as exc:
@@ -114,6 +140,42 @@ def cmd_tier1(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tier1_frigate(config: Config, args: argparse.Namespace) -> int:
+    """`tier1` for a Frigate camera: print each arrival and its snapshot's
+    size; --save-snapshots DIR keeps the JPEGs. --max-seconds is checked as
+    messages arrive, so a quiet camera can overrun it; Ctrl-C always works."""
+    from lookout.events import DetectionEvent, Frame
+
+    try:
+        source = frigate_source(config, args.camera)
+    except ConfigError as exc:
+        print(f"config error: {exc}", file=sys.stderr)
+        return 1
+    t0 = time.perf_counter()
+    events = 0
+    try:
+        for item in source.stream():
+            if isinstance(item, Frame) and args.save_snapshots:
+                path = os.path.join(args.save_snapshots, f"{item.ref.replace(':', '-')}.jpg")
+                with open(path, "wb") as fh:
+                    fh.write(item.data)
+                print(f"          snapshot saved to {path}", flush=True)
+            elif isinstance(item, Frame):
+                print(f"          snapshot {item.ref}: {len(item.data) // 1024} KB", flush=True)
+            elif isinstance(item, DetectionEvent):
+                events += 1
+                print(f"[{item.ts:7.2f}] {item.camera}: {item.label} ({item.confidence:.2f}) bbox={item.bbox}", flush=True)
+            if args.max_seconds and time.perf_counter() - t0 >= args.max_seconds:
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        source.snapshots.close()
+    print()
+    print(f"{source.messages_read} frigate message(s), {events} arrival(s), {time.perf_counter() - t0:.1f}s wall")
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """The real thing: every camera in the config streams through the detector
     into the engine, escalations go to the models in the registry, actions go
@@ -130,19 +192,29 @@ def cmd_run(args: argparse.Namespace) -> int:
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 1
-    try:
-        detector = load_detector(config.tier1, models_dir=args.models_dir)
-    except DetectorError as exc:
-        print(f"detector error: {exc}", file=sys.stderr)
-        return 1
+    cameras = {n: c for n, c in config.cameras.items() if not args.camera or n in args.camera}
+    detector = None
+    if any(c.tier1 == "yolo" for c in cameras.values()):
+        # Only when a camera needs it: a Frigate-only config runs without the
+        # exported model (and without the memory it takes).
+        try:
+            detector = load_detector(config.tier1, models_dir=args.models_dir)
+        except DetectorError as exc:
+            print(f"detector error: {exc}", file=sys.stderr)
+            return 1
     sources = {}
-    for name, camera in config.cameras.items():
-        if args.camera and name not in args.camera:
-            continue
-        if camera.tier1 != "yolo":
+    for name, camera in cameras.items():
+        if camera.tier1 == "yolo":
+            assert detector is not None and camera.source is not None
+            sources[name] = VideoSource(name, camera.source, detector, config.tier1, loop=args.loop)
+        elif camera.tier1 == "frigate":
+            try:
+                sources[name] = frigate_source(config, name)
+            except ConfigError as exc:
+                print(f"config error: {exc}", file=sys.stderr)
+                return 1
+        else:
             print(f"skipping camera {name}: tier1 source '{camera.tier1}' is not implemented", file=sys.stderr)
-            continue
-        sources[name] = VideoSource(name, camera.source, detector, config.tier1, loop=args.loop)
     if not sources:
         print("no cameras to run", file=sys.stderr)
         return 1
@@ -216,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--source", help="override the camera's source URI (file, RTSP, or device index)")
     p.add_argument("--models-dir", default=MODELS_DIR, help=MODELS_DIR_HELP)
     p.add_argument("--max-seconds", type=float, default=0, help="stop after this many seconds (live sources never end)")
+    p.add_argument("--save-snapshots", metavar="DIR", help="Frigate cameras: write each arrival's snapshot here")
     p.set_defaults(func=cmd_tier1)
 
     p = sub.add_parser("run", help="watch every camera live, escalate to the models, fire actions")

@@ -106,6 +106,38 @@ The first detector run then exports `yolov8n_openvino_model/` into
 `--models-dir` (default: the working directory), and from then on only the
 export is used. Point `--models-dir` at an existing export to skip all this.
 
+### 2b. Frigate instead of the built-in detector
+
+If a [Frigate](https://frigate.video) NVR already watches the camera, lookout
+can take its triggers from Frigate's object tracker instead of running YOLO
+itself (`"tier1": "frigate"` on the camera). Frigate publishes every tracked
+object to `frigate/events` over MQTT; lookout raises one event per object, the
+first time it is stationary in one of the camera's `zones` *and* has travelled
+at least `min_travel` box sizes since lookout first saw it. Passing traffic
+never stops in the zone, and a car parked when Frigate or lookout restarted
+never travels, so neither fires. The step's image is Frigate's snapshot of
+that object, cropped to it (`crop: false` for the whole frame).
+
+```json
+"frigate": {
+  "url": "http://<frigate>:5000",
+  "mqtt": { "host": "<broker>", "username": "lookout", "password_env": "LOOKOUT_MQTT_PASSWORD" }
+},
+"cameras": {
+  "driveway": { "tier1": "frigate", "frigate": { "camera": "outside", "zones": ["driveway"] } }
+}
+```
+
+A Frigate camera supplies one snapshot per arrival, not a frame stream, so
+only `image` steps can run on it; config load rejects the others. No detector
+is loaded unless some camera uses `"tier1": "yolo"`. Watch arrivals alone,
+saving each snapshot:
+
+```
+uv run python -m lookout tier1 --config config/frigate.local.json \
+  --camera driveway --save-snapshots /tmp/arrivals
+```
+
 ### 3. The whole thing
 
 Point the models registry at an OpenAI-compatible endpoint that serves the
@@ -129,7 +161,8 @@ runtime surprise.
 | Section | What it holds |
 |---|---|
 | `models` | name → endpoint, model id, `capabilities` (`image`, `image_sequence`, `video_clip`), optional `api_key_env` |
-| `cameras` | name → `source` URI, optional `clips` (a MediaMTX playback endpoint and path, required by any `video_clip` step) |
+| `cameras` | name → `source` URI, optional `clips` (a MediaMTX playback endpoint and path, required by any `video_clip` step); or `"tier1": "frigate"` with a `frigate` block (camera name in Frigate, zones, `min_travel`, `crop`) |
+| `frigate` | Frigate's API `url` and its MQTT broker (`host`, `port`, `username`, `password_env`, `topic_prefix`); required by any Frigate camera |
 | `tier1` | detector model and backend, confidence thresholds, debounce, analysis and buffer frame rates |
 | `actions` | `sink`: `mock` (logs what it would do) or `ha_webhook` with `ha_webhook_url`, or `ha_webhook_url_env` naming a variable that holds it |
 | `chains` | trigger, steps, windows, outcomes; or `on_trigger` for a chain with no steps |
@@ -266,11 +299,15 @@ Three honest points.
 
 ## Limitations
 
-- No object tracking. Passing traffic still fires: each car crossing the
-  street at a fresh spot is a count rise, and the VLM's "other, end" outcome
-  absorbs the cost (about 30 an hour on this camera in daylight). A zone mask
-  won't fix it here, because the delivery van stops on the same street; a
-  stationarity check (fire once the new box stays put) would, and is not built.
+- The built-in detector has no object tracking. Passing traffic still fires:
+  each car crossing the street at a fresh spot is a count rise, and the VLM's
+  "other, end" outcome absorbs the cost (about 30 an hour on this camera in
+  daylight). The Frigate source doesn't have this problem (it fires on
+  tracked objects that stop in a zone); the built-in path would need its own
+  stationarity check, which is not built.
+- The Frigate source's arrival needs Frigate to call the object stationary,
+  which takes a few seconds after it stops (Frigate's
+  `detect.stationary.threshold`). And it only triggers image steps.
 - The spot memory can't tell a returning car from its twin: a different car
   parking where another one sat within `memory_s` is absorbed.
 - A looping fake camera has a seam where the scene cuts; the debouncer sees

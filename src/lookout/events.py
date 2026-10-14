@@ -9,8 +9,9 @@ That seam is what lets tier-1 be swapped without touching the engine:
     JSONL fixture, plus synthetic frames so windows have something to sample,
     so the engine, scheduler, and chains are fully exercisable with no camera,
     no GPU, and no network.
-  - FrigateMqttSource — future: consume Frigate's tracked-object events over MQTT
-    instead of running our own detector. Deliberately unimplemented in v1.
+  - FrigateSource (frigate.py) — consume Frigate's tracked-object events over
+    MQTT instead of running our own detector: one event per vehicle that
+    travels into a zone and stops, with Frigate's snapshot of it as the frame.
 
 A source yields Frames as well as events, in time order. Frames feed the
 per-camera ring buffer that escalation payloads are sliced from; events say
