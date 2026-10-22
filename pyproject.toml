@@ -38,6 +38,9 @@ torch = [
 # serves it too (it only reads and writes images). pip does not read this, so
 # a pip install with the extra gets both.
 override-dependencies = ["opencv-python; sys_platform == 'never'"]
+# Security floors for transitive dependencies, including the export-only extra.
+# certifi: emSign CA compromise; Pillow/urllib3: October 2026 advisories.
+constraint-dependencies = ["certifi>=2026.10.19", "pillow>=13.0.0", "urllib3>=2.8.0"]
 
 [dependency-groups]
 dev = [

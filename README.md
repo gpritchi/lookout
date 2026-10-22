@@ -46,6 +46,10 @@ LiteLLM proxy. See *Limitations* for the honest list of rough edges.
 ## Run it
 
 Everything below needs Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+The checked-in `.python-version` selects Python 3.14 for development and CI;
+all Docker stages inherit the same Python 3.14/Trixie base. Python 3.15 is held
+until OpenVINO and CPU torch/torchvision wheels support it. Update the Docker
+base and `.python-version` together when lifting that hold.
 
 ```
 uv sync
@@ -78,6 +82,22 @@ The image carries the detector already exported to OpenVINO, so the live
 commands below run in it with no network access to fetch weights and no
 writable models directory. It has no torch in it: lookout runs the export on
 the OpenVINO runtime directly.
+
+Every trusted branch push now audits all locked dependencies (including the
+export-only extra), runs pytest, builds the complete Linux image and exercises
+the shipped detector and offline replay without network access, as a non-root
+user with a read-only filesystem. It also checks the system and certifi CA
+bundles for the compromised emSign/AAA trust paths. Only a validated `main`
+build pushes `lookout:main`; a branch build never publishes that tag. The
+registry and runner still come from the `REGISTRY` and `RUNNER` repository
+variables, with registry credentials supplied by the private runner.
+
+Renovate refreshes transitive lock pins on weekdays. A separate weekday run
+of the same workflow audits the lock against OSV without building or publishing
+an image. Run that check locally with `uv run --no-project python tools/audit-lock.py`.
+The certifi, Pillow and urllib3 constraints in `pyproject.toml` record security
+floors. Advisory matches include build-only and other-platform dependencies;
+they do not establish exploitability in the running service.
 
 ### 2. A real camera, or a fake one
 
