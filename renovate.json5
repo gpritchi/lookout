@@ -1,0 +1,26 @@
+// Renovate: version-bump PRs, run by the self-hosted Renovate in
+// kubernetes_cluster (apps/renovate, weekdays 08:00). Nothing automerges.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:recommended"],
+  timezone: "America/Vancouver",
+  // One run a day, so an hourly cap would mean a couple of PRs a day.
+  prHourlyLimit: 0,
+
+  // Refresh uv.lock's transitive pins weekly.
+  lockFileMaintenance: { enabled: true, schedule: ["* * * * 1"] },
+
+  packageRules: [
+    {
+      // pyproject.toml / uv.lock: one PR for every non-major bump.
+      matchManagers: ["pep621"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "Python dependencies (non-major)",
+    },
+    {
+      // The uv builder and the Python runtime image move together.
+      matchManagers: ["dockerfile"],
+      groupName: "Base images",
+    },
+  ],
+}
