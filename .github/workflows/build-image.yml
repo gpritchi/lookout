@@ -36,7 +36,7 @@ jobs:
     runs-on: ${{ vars.RUNNER }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Log in to the registry
         run: printf '%s' "$REGISTRY_PASSWORD" | docker login "${{ vars.REGISTRY }}" -u "$REGISTRY_USER" --password-stdin

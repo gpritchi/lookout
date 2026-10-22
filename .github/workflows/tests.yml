@@ -14,7 +14,7 @@ jobs:
     runs-on: ${{ vars.RUNNER }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: astral-sh/setup-uv@v10.1.0
         with:
