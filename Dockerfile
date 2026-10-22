@@ -10,17 +10,30 @@
 # GB of NVIDIA libraries). With them in the runtime venv, plus the GUI OpenCV
 # build and the libGL it needs, the image was 1.99 GB on disk; without, 559 MB.
 
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:0.13.4 AS uv
+
+# One interpreter and OS for both build stages and the copied runtime venv.
+# Python 3.15 must wait for OpenVINO and CPU torch/torchvision wheels.
+FROM python:3.14-slim-trixie AS python-base
+# CI changes this value on every build so a cached base cannot hide CA updates.
+ARG CA_REFRESH=manual
+RUN echo "Refreshing CA certificates: ${CA_REFRESH}" \
+    && apt-get update \
+    && apt-get install --no-install-recommends -y ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM python-base AS builder
+COPY --from=uv /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
 WORKDIR /app
 # Dependencies first, so source edits do not invalidate the dependency layer.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
+    uv sync --locked --no-install-project --no-dev
 COPY src ./src
 COPY README.md ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+    uv sync --locked --no-dev
 
 # The detector, baked in: pinned weights exported to OpenVINO at build time, so
 # a pod needs no internet and no writable models dir to start. The URL is a
@@ -29,19 +42,20 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # config that changes it is refused at startup with a message saying so.
 # Its own venv, from the lockfile alone, so a source edit does not redo the
 # torch install and the export.
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS detector
+FROM python-base AS detector
+COPY --from=uv /uv /uvx /bin/
 ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
 WORKDIR /export
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --extra torch
+    uv sync --locked --no-install-project --no-dev --extra torch
 ADD --checksum=sha256:f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36 \
     https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt /models/yolov8n.pt
 RUN YOLO_CONFIG_DIR=/tmp /export/.venv/bin/python -c \
     "from ultralytics import YOLO; YOLO('/models/yolov8n.pt').export(format='openvino', imgsz=640, half=False)"
 
-# No apt packages: the headless OpenCV wheel does not link libGL.
-FROM python:3.13-slim-bookworm
+# The headless OpenCV wheel does not need additional libGL packages.
+FROM python-base AS runtime
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src

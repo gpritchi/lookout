@@ -1,28 +1,68 @@
-# Run the test suite on every push, on the self-hosted runner named by the
-# RUNNER repository variable. Same reasoning as build-image.yml: no
-# pull_request trigger, because a fork's workflow must never reach a private
-# runner. Branch pushes from this repo are what gets tested, which is how the
-# PRs here are made.
+# Only trusted repository pushes/manual runs execute on the private runner.
+# Never add a pull_request_target trigger or execute fork PR code here.
 name: tests
 
 on:
   push:
   workflow_dispatch:
+  schedule:
+    # Check transitive advisories every weekday, even without a code push.
+    - cron: '30 15 * * 1-5'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lookout-validation-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   pytest:
     runs-on: ${{ vars.RUNNER }}
-    timeout-minutes: 20
+    timeout-minutes: 45
+    env:
+      IMAGE: lookout:check-${{ github.sha }}
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: astral-sh/setup-uv@v10.1.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.2
         with:
-          python-version: "3.13"
+          version: '0.13.4'
           enable-cache: true
 
+      - name: Audit every locked dependency, including export-only packages
+        run: uv run --no-project python tools/audit-lock.py
+
       - name: Install
-        run: uv sync --frozen
+        if: github.event_name != 'schedule'
+        run: uv sync --locked
 
       - name: Test
-        run: uv run pytest -q -W error
+        if: github.event_name != 'schedule'
+        run: uv run --locked pytest -q -W error
+
+      - name: Build the complete Linux image and export the detector
+        if: github.event_name != 'schedule'
+        run: |
+          docker build --pull \
+            --build-arg "CA_REFRESH=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            -t "$IMAGE" .
+
+      - name: Smoke test without network, as an unprivileged user
+        if: github.event_name != 'schedule'
+        run: |
+          docker run --rm -i --network none --read-only \
+            --tmpfs /tmp:rw,size=256m --user 65532:65532 -e HOME=/tmp \
+            --entrypoint python "$IMAGE" - "$(cat .python-version)" < tools/smoke-image.py
+
+      # Build, audit and smoke must all pass before the deployed tag can move.
+      - name: Publish production image
+        if: github.ref == 'refs/heads/main' && github.event_name != 'schedule'
+        env:
+          REGISTRY: ${{ vars.REGISTRY }}
+        run: |
+          trap 'docker logout "$REGISTRY"' EXIT
+          printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+          docker tag "$IMAGE" "$REGISTRY/lookout:sha-${GITHUB_SHA::7}"
+          docker tag "$IMAGE" "$REGISTRY/lookout:main"
+          docker push "$REGISTRY/lookout:sha-${GITHUB_SHA::7}"
+          docker push "$REGISTRY/lookout:main"

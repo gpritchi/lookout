@@ -7,8 +7,8 @@
   // One run a day, so an hourly cap would mean a couple of PRs a day.
   prHourlyLimit: 0,
 
-  // Refresh uv.lock's transitive pins weekly.
-  lockFileMaintenance: { enabled: true, schedule: ["* * * * 1"] },
+  // Broad minimum requirements otherwise leave transitive pins stale.
+  lockFileMaintenance: { enabled: true, schedule: ["* * * * 1-5"] },
 
   packageRules: [
     {
@@ -18,9 +18,18 @@
       groupName: "Python dependencies (non-major)",
     },
     {
-      // The uv builder and the Python runtime image move together.
-      matchManagers: ["dockerfile"],
-      groupName: "Base images",
+      matchPackageNames: ["ghcr.io/astral-sh/uv", "astral-sh/uv"],
+      groupName: "uv tooling",
+    },
+    {
+      // All Docker stages inherit one Python base; CI reads .python-version.
+      matchManagers: ["dockerfile", "pyenv"],
+      matchPackageNames: ["python"],
+      groupName: "Python runtime",
+      // Remove only after OpenVINO and CPU torch/torchvision publish wheels
+      // and the complete image/export/smoke checks pass on the next minor.
+      allowedVersions: "/^3\\.14(?:\\.|-|$)/",
+      prBodyNotes: ["Python is held on 3.14 because OpenVINO and CPU torch/torchvision lack 3.15 wheels. All stages share the Docker base; keep .python-version aligned."],
     },
   ],
 }
