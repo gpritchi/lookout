@@ -41,7 +41,7 @@ RUN YOLO_CONFIG_DIR=/tmp /export/.venv/bin/python -c \
     "from ultralytics import YOLO; YOLO('/models/yolov8n.pt').export(format='openvino', imgsz=640, half=False)"
 
 # No apt packages: the headless OpenCV wheel does not link libGL.
-FROM python:3.13-slim-bookworm
+FROM python:3.15-slim-bookworm
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
