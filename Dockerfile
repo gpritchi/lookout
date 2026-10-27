@@ -10,7 +10,7 @@
 # GB of NVIDIA libraries). With them in the runtime venv, plus the GUI OpenCV
 # build and the libGL it needs, the image was 1.99 GB on disk; without, 559 MB.
 
-FROM ghcr.io/astral-sh/uv:0.13.5 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.6 AS uv
 
 # One interpreter and OS for both build stages and the copied runtime venv.
 # Python 3.15 must wait for OpenVINO and CPU torch/torchvision wheels.
