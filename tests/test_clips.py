@@ -1,5 +1,5 @@
 """MediaMTX clip provider: URL shape, wall-clock conversion, retries. Plus the
-engine's video_clip dispatch and the client's input_video part, with fakes."""
+engine's video_clip dispatch and the client's video_url part, with fakes."""
 
 import base64
 import json
@@ -127,7 +127,7 @@ def test_engine_resets_chain_when_clip_unavailable():
     assert any("clip failed (recorder down)" in line for line in trace)
 
 
-def test_client_sends_input_video_part():
+def test_client_sends_video_url_part():
     seen = []
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -142,6 +142,7 @@ def test_client_sends_input_video_part():
                           chain_id="porch", step_id="watch", generation=1, center_ts=20.0, clip=MP4)
     assert client(InferenceJob(model="omni", priority=1, chain_id="porch", step_id="watch", payload=payload)) == "TAKEN"
     parts = seen[0]["messages"][0]["content"]
-    assert [p["type"] for p in parts] == ["input_video", "text"]
-    assert parts[0]["input_video"]["data"] == base64.b64encode(MP4).decode()  # raw base64, no data: prefix
+    # video_url with a data: URL: the OpenAI-style part LiteLLM lets through.
+    assert [p["type"] for p in parts] == ["video_url", "text"]
+    assert parts[0]["video_url"]["url"] == "data:video/mp4;base64," + base64.b64encode(MP4).decode()
     assert seen[0]["model"] == "nemotron"

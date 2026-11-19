@@ -290,7 +290,8 @@ intent filter. The tier boundary is empirical and movable in both directions.
   serving one model is a second worker with a shorter list.
 - **`vlm.py`** — the OpenAI-compatible client. Sequences interleave a text
   part between images because llama.cpp merges consecutive images into one
-  video input. Clips go as llama.cpp's `input_video` part.
+  video input. Clips go as an OpenAI-style `video_url` part (a
+  `data:video/mp4` URL), which LiteLLM passes through.
 - **`clips.py`** — fetches a time range from a MediaMTX recorder as MP4,
   audio track included. Whether the server actually uses that track is the
   server's business; see *Limitations* for the one I tested against.
@@ -335,12 +336,14 @@ Three honest points.
 - Capture-to-event lag is about two seconds at 1080p on a laptop CPU.
 - Clip steps fetch the MP4 on the engine's tick thread. A few MB over a LAN;
   fine at this scale, not at fifty cameras.
-- `video_clip` steps rely on a server that accepts llama.cpp's `input_video`
-  part. Upstream llama.cpp feeds frames only; true audio and temporal video
-  for Nemotron Omni need the `llama.cpp-omni` fork. A proxy that validates
-  against the OpenAI schema (LiteLLM does) rejects that part, so the clip
-  model's `endpoint` points at the server directly. Per-model endpoints exist
-  for exactly this.
+- `video_clip` steps rely on a server that accepts a `video_url` part.
+  llama.cpp's server does from release b11136 on (#27921, an alias of its own
+  `input_video`), and so does vLLM. Upstream llama.cpp feeds frames only; true
+  audio and temporal video for Nemotron Omni need the `llama.cpp-omni` fork,
+  which predates b11136, so that change has to be backported onto it.
+  `input_video` itself would be simpler for the server, but LiteLLM's message
+  validation rejects any content type outside the OpenAI set, and `video_url`
+  is in it.
 - The audio only just made it. The fork's build I first ran logged "failed to
   decode the video's audio track — audio track skipped, frames only" for every
   recorder clip, so the first round of live Nemotron answers was reached from

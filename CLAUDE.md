@@ -56,8 +56,9 @@ The journal and everything in `notes/` stays out of the repo. Do not weaken the
   hardcoded. `image_sequence` is sent as multiple image parts with a short text part
   between each (llama.cpp merges strictly consecutive images as video frames).
   `video_clip` payloads are MP4s fetched from the recorder (MediaMTX playback API)
-  for the step's window, audio track included, and sent as llama.cpp's `input_video`
-  part. Only a model that genuinely understands sequence and sound earns that
+  for the step's window, audio track included, and sent as a `video_url` part with a
+  `data:video/mp4` URL (llama.cpp ≥ b11136 aliases it to `input_video`; LiteLLM
+  rejects `input_video` itself). Only a model that genuinely understands sequence and sound earns that
   step: put-down vs pick-up, how many got out, what was said at the door.
 - **Actions**: mock sink (prints/logs what it would have done) is the default; a real
   HA webhook URL is an optional config field. Demo runs on the mock sink.

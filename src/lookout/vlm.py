@@ -12,11 +12,14 @@ Payload shapes:
                   between images is not decoration: llama.cpp merges strictly
                   consecutive image parts into one "video" input, so without a
                   separator a six-frame window can arrive as three frames.
-  video_clip      one `input_video` part carrying the MP4 as a data URL, then
-                  the prompt. This is llama.cpp's own content type (and the
-                  llama.cpp-omni fork's, which also reads the clip's audio
-                  track); the OpenAI API has no video part, so a proxy in the
-                  middle has to pass it through untouched.
+  video_clip      one `video_url` part carrying the MP4 as a data:video/mp4
+                  URL, then the prompt. llama.cpp's server takes `video_url`
+                  as an alias of its own `input_video` from release b11136 on
+                  (#27921), as does vLLM. Unlike `input_video`, it passes
+                  LiteLLM's message validation, so clips can go through the
+                  proxy like everything else. The llama.cpp-omni fork, which
+                  also reads the clip's audio track, needs that change
+                  backported.
 
 Frames must carry JPEG bytes (`Frame.data`). Replay fixtures have none, and
 that is a configuration error at this layer, not something to paper over.
@@ -134,8 +137,8 @@ def _image_part(jpeg: bytes) -> dict[str, Any]:
 
 
 def _video_part(mp4: bytes) -> dict[str, Any]:
-    # Raw base64, not a data: URL. llama.cpp's input_video path decodes the
-    # whole string as base64 (the data:-URL parsing belongs to image_url only),
-    # so a prefixed value turns into a few garbage bytes and "failed to decode
-    # buffer as either image/audio/video".
-    return {"type": "input_video", "input_video": {"data": base64.b64encode(mp4).decode("ascii")}}
+    # A data: URL, as for images. Older llama.cpp builds (before b11136) took
+    # video only as raw base64 in `input_video` and turned a data: URL into
+    # garbage bytes ("failed to decode buffer as either image/audio/video").
+    b64 = base64.b64encode(mp4).decode("ascii")
+    return {"type": "video_url", "video_url": {"url": f"data:video/mp4;base64,{b64}"}}
